@@ -197,7 +197,7 @@ class SonalityAgent:
         self.client = (
             None
             if config.API_VARIANT == "openrouter"
-            else Anthropic(**config.anthropic_client_kwargs())
+            else Anthropic(api_key=config.API_KEY, base_url=config.BASE_URL)
         )
         self.sponge = SpongeState.load(config.SPONGE_FILE)
         self.episodes = EpisodeStore(str(config.CHROMADB_DIR))
