@@ -492,7 +492,10 @@ class SonalityAgent:
         """
         if ess.default_severity in {"missing", "exception"}:
             return False
-        if ess.default_severity == "coercion" and ess.score < config.ESS_THRESHOLD + COERCION_UPDATE_MARGIN:
+        if (
+            ess.default_severity == "coercion"
+            and ess.score < config.ESS_THRESHOLD + COERCION_UPDATE_MARGIN
+        ):
             return False
         return not any(field in CRITICAL_ESS_DEFAULT_FIELDS for field in ess.defaulted_fields)
 
