@@ -73,9 +73,17 @@ TEXT_TOKEN_PATTERN: Final = re.compile(r"[a-z0-9]+")
 
 
 StepProgressEvent = Literal["start", "end"]
-StepProgressCallback = Callable[
-    [StepProgressEvent, int, int, ScenarioStep, StepResult | None], None
-]
+StepProgressCallback = Callable[[StepProgressEvent, int, int, ScenarioStep, object], None]
+
+
+def _noop_step_progress(
+    event: StepProgressEvent,
+    step_index: int,
+    step_total: int,
+    step: ScenarioStep,
+    result: object,
+) -> None:
+    _ = (event, step_index, step_total, step, result)
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,8 +120,26 @@ def _capture_step_baseline(agent: SonalityAgent) -> _StepBaseline:
         opinion_vectors=dict(sponge.opinion_vectors),
         staged_updates=len(sponge.staged_opinion_updates),
         pending_insights=len(sponge.pending_insights),
-        episode_count=agent.episodes.collection.count(),
+        episode_count=_episode_count(agent),
     )
+
+
+def _episode_count(agent: SonalityAgent) -> int:
+    """Best-effort episode counter across runtime variants."""
+    episodes_obj = getattr(agent, "episodes", None)
+    collection_obj = getattr(episodes_obj, "collection", None)
+    count_fn = getattr(collection_obj, "count", None)
+    if not callable(count_fn):
+        return 0
+    try:
+        count_value = count_fn()
+    except Exception:
+        return 0
+    if isinstance(count_value, bool):
+        return 0
+    if isinstance(count_value, (int, float)):
+        return max(int(count_value), 0)
+    return 0
 
 
 def _did_disagree(
@@ -153,7 +179,7 @@ def _build_step_result(
     sponge = agent.sponge
     disagreement_after = agent.sponge.behavioral_signature.disagreement_rate
     interaction_after = agent.sponge.interaction_count
-    episode_count_after = agent.episodes.collection.count()
+    episode_count_after = _episode_count(agent)
     opinion_vectors_after = dict(sponge.opinion_vectors)
     staged_updates_after = len(sponge.staged_opinion_updates)
     pending_insights_after = len(sponge.pending_insights)
@@ -224,7 +250,7 @@ def run_scenario(
     scenario: Sequence[ScenarioStep],
     tmp_dir: str,
     session_split_at: int = NO_SESSION_SPLIT,
-    step_progress: StepProgressCallback | None = None,
+    step_progress: StepProgressCallback = _noop_step_progress,
     ess_min_slack: float = 0.0,
     ess_max_slack: float = 0.0,
 ) -> list[StepResult]:
@@ -243,7 +269,6 @@ def run_scenario(
     with (
         mock.patch.object(config, "SPONGE_FILE", Path(tmp_dir) / "sponge.json"),
         mock.patch.object(config, "SPONGE_HISTORY_DIR", Path(tmp_dir) / "history"),
-        mock.patch.object(config, "CHROMADB_DIR", Path(tmp_dir) / "chromadb"),
         mock.patch.object(config, "ESS_AUDIT_LOG_FILE", Path(tmp_dir) / "ess_log.jsonl"),
     ):
         from sonality.agent import SonalityAgent
@@ -253,8 +278,7 @@ def run_scenario(
 
         for idx, step in enumerate(scenario):
             step_index = idx + 1
-            if step_progress is not None:
-                step_progress("start", step_index, scenario_len, step, None)
+            step_progress("start", step_index, scenario_len, step, "start")
             if idx == split_index:
                 agent = SonalityAgent()
             before = _capture_step_baseline(agent)
@@ -274,8 +298,7 @@ def run_scenario(
                 raise RuntimeError(
                     f"Scenario step failed ({step_index}/{scenario_len}, label='{step.label}')"
                 ) from exc
-            if step_progress is not None:
-                step_progress("end", step_index, scenario_len, step, result)
+            step_progress("end", step_index, scenario_len, step, result)
             results.append(result)
 
         return results

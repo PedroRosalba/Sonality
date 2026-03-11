@@ -7,19 +7,16 @@ Bi-temporal tracking with created_at/valid_at/expired_at on episodes.
 
 from __future__ import annotations
 
-import logging
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
-from neo4j import AsyncDriver
+from neo4j import AsyncDriver, AsyncManagedTransaction
 
 from .. import config
-
-log = logging.getLogger(__name__)
-
-type EpisodeUID = str
-type DerivativeUID = str
+from .context_format import format_episode_line
 
 
 class EdgeType(StrEnum):
@@ -41,11 +38,11 @@ class EpisodeNode:
     ess_score: float
     created_at: str  # ISO8601
     valid_at: str
-    expired_at: str | None = None
+    expired_at: str = ""
     utility_score: float = 0.0
     access_count: int = 0
     last_accessed: str = ""
-    segment_id: str | None = None
+    segment_id: str = ""
     consolidation_level: int = 1
     archived: bool = False
     user_message: str = ""
@@ -61,15 +58,6 @@ class DerivativeNode:
     sequence_num: int
 
 
-@dataclass(frozen=True, slots=True)
-class TemporalContext:
-    """Episodes in temporal order around a focal point."""
-
-    before: list[EpisodeNode]
-    focal: EpisodeNode
-    after: list[EpisodeNode]
-
-
 _DB: Final = config.NEO4J_DATABASE
 
 
@@ -79,25 +67,37 @@ class MemoryGraph:
     def __init__(self, driver: AsyncDriver) -> None:
         self._driver = driver
 
-    async def create_episode(
+    async def store_episode_atomically(
         self,
-        episode: EpisodeNode,
         *,
-        prev_episode_uid: str | None = None,
+        episode: EpisodeNode,
+        derivatives: list[DerivativeNode],
+        prev_episode_uid: str,
+        topics: list[str],
+        segment_id: str,
+        segment_label: str,
+        segment_reasoning: str,
     ) -> None:
-        """Create an Episode node with optional TEMPORAL_NEXT edge from previous."""
+        """Store episode + derivatives + graph links in one write transaction."""
         async with self._driver.session(database=_DB) as session:
             await session.execute_write(
-                self._create_episode_tx, episode, prev_episode_uid
+                self._store_episode_atomically_tx,
+                episode,
+                derivatives,
+                prev_episode_uid,
+                topics,
+                segment_id,
+                segment_label,
+                segment_reasoning,
             )
 
     @staticmethod
     async def _create_episode_tx(
-        tx: object,  # AsyncManagedTransaction
+        tx: AsyncManagedTransaction,
         episode: EpisodeNode,
-        prev_uid: str | None,
+        prev_uid: str,
     ) -> None:
-        await tx.run(  # type: ignore[union-attr]
+        await tx.run(
             """
             CREATE (e:Episode {
                 uid: $uid, content: $content, summary: $summary,
@@ -128,7 +128,7 @@ class MemoryGraph:
             agent_response=episode.agent_response,
         )
         if prev_uid:
-            await tx.run(  # type: ignore[union-attr]
+            await tx.run(
                 """
                 MATCH (prev:Episode {uid: $prev_uid})
                 MATCH (curr:Episode {uid: $curr_uid})
@@ -138,25 +138,39 @@ class MemoryGraph:
                 curr_uid=episode.uid,
             )
 
-    async def create_derivatives(
-        self,
+    @staticmethod
+    async def _store_episode_atomically_tx(
+        tx: AsyncManagedTransaction,
+        episode: EpisodeNode,
         derivatives: list[DerivativeNode],
-        episode_uid: str,
+        prev_uid: str,
+        topics: list[str],
+        segment_id: str,
+        segment_label: str,
+        segment_reasoning: str,
     ) -> None:
-        """Create Derivative nodes with DERIVED_FROM edges to their episode."""
-        async with self._driver.session(database=_DB) as session:
-            await session.execute_write(
-                self._create_derivatives_tx, derivatives, episode_uid
+        await MemoryGraph._create_episode_tx(tx, episode, prev_uid)
+        if derivatives:
+            await MemoryGraph._create_derivatives_tx(tx, derivatives, episode.uid)
+        for topic in topics:
+            await MemoryGraph._link_topic_tx(tx, episode.uid, topic)
+        if segment_id:
+            await MemoryGraph._link_segment_tx(
+                tx,
+                episode.uid,
+                segment_id,
+                segment_label,
+                segment_reasoning,
             )
 
     @staticmethod
     async def _create_derivatives_tx(
-        tx: object,
+        tx: AsyncManagedTransaction,
         derivatives: list[DerivativeNode],
         episode_uid: str,
     ) -> None:
         for d in derivatives:
-            await tx.run(  # type: ignore[union-attr]
+            await tx.run(
                 """
                 CREATE (d:Derivative {
                     uid: $uid, source_episode_uid: $source_uid,
@@ -175,17 +189,9 @@ class MemoryGraph:
                 episode_uid=episode_uid,
             )
 
-    async def link_topics(self, episode_uid: str, topics: list[str]) -> None:
-        """Create/update Topic nodes and DISCUSSES edges."""
-        async with self._driver.session(database=_DB) as session:
-            for topic in topics:
-                await session.execute_write(
-                    self._link_topic_tx, episode_uid, topic
-                )
-
     @staticmethod
-    async def _link_topic_tx(tx: object, episode_uid: str, topic: str) -> None:
-        await tx.run(  # type: ignore[union-attr]
+    async def _link_topic_tx(tx: AsyncManagedTransaction, episode_uid: str, topic: str) -> None:
+        await tx.run(
             """
             MERGE (t:Topic {name: $topic})
             ON CREATE SET t.episode_count = 1, t.first_seen_at = datetime()
@@ -199,28 +205,36 @@ class MemoryGraph:
             uid=episode_uid,
         )
 
-    async def link_segment(self, episode_uid: str, segment_id: str, label: str = "") -> None:
-        """Create/update Segment node and BELONGS_TO_SEGMENT edge."""
-        async with self._driver.session(database=_DB) as session:
-            await session.execute_write(
-                self._link_segment_tx, episode_uid, segment_id, label
-            )
-
     @staticmethod
-    async def _link_segment_tx(tx: object, episode_uid: str, segment_id: str, label: str) -> None:
-        await tx.run(  # type: ignore[union-attr]
+    async def _link_segment_tx(
+        tx: AsyncManagedTransaction,
+        episode_uid: str,
+        segment_id: str,
+        label: str,
+        reasoning: str,
+    ) -> None:
+        await tx.run(
             """
             MERGE (s:Segment {segment_id: $segment_id})
             ON CREATE SET s.label = $label, s.start_time = datetime(),
+                          s.boundary_reasoning = $reasoning,
                           s.episode_count = 1, s.consolidated = false
             ON MATCH SET s.episode_count = s.episode_count + 1,
-                         s.end_time = datetime()
+                         s.end_time = datetime(),
+                         s.label = CASE
+                            WHEN (s.label IS NULL OR s.label = '') AND $label <> ''
+                            THEN $label ELSE s.label END,
+                         s.boundary_reasoning = CASE
+                            WHEN (s.boundary_reasoning IS NULL OR s.boundary_reasoning = '')
+                                 AND $reasoning <> ''
+                            THEN $reasoning ELSE s.boundary_reasoning END
             WITH s
             MATCH (e:Episode {uid: $uid})
             CREATE (e)-[:BELONGS_TO_SEGMENT]->(s)
             """,
             segment_id=segment_id,
             label=label,
+            reasoning=reasoning,
             uid=episode_uid,
         )
 
@@ -229,12 +243,11 @@ class MemoryGraph:
         episode_uid: str,
         topic: str,
         *,
-        supports: bool,
+        edge_type: EdgeType,
         strength: float = 0.5,
         reasoning: str = "",
     ) -> None:
-        """Create SUPPORTS_BELIEF or CONTRADICTS_BELIEF edge."""
-        edge_type = EdgeType.SUPPORTS_BELIEF if supports else EdgeType.CONTRADICTS_BELIEF
+        """Create one belief provenance edge for an episode."""
         async with self._driver.session(database=_DB) as session:
             await session.execute_write(
                 self._link_belief_tx, episode_uid, topic, edge_type, strength, reasoning
@@ -242,14 +255,14 @@ class MemoryGraph:
 
     @staticmethod
     async def _link_belief_tx(
-        tx: object,
+        tx: AsyncManagedTransaction,
         episode_uid: str,
         topic: str,
         edge_type: str,
         strength: float,
         reasoning: str,
     ) -> None:
-        await tx.run(  # type: ignore[union-attr]
+        await tx.run(
             f"""
             MERGE (b:Belief {{topic: $topic}})
             WITH b
@@ -264,18 +277,6 @@ class MemoryGraph:
             reasoning=reasoning,
         )
 
-    async def get_episode(self, uid: str) -> EpisodeNode | None:
-        """Fetch a single episode by UID."""
-        async with self._driver.session(database=_DB) as session:
-            result = await session.run(
-                "MATCH (e:Episode {uid: $uid}) RETURN e",
-                uid=uid,
-            )
-            record = await result.single()
-            if not record:
-                return None
-            return _record_to_episode(record["e"])
-
     async def get_episodes(self, uids: list[str]) -> list[EpisodeNode]:
         """Fetch multiple episodes by UID."""
         if not uids:
@@ -288,18 +289,48 @@ class MemoryGraph:
             records = [record async for record in result]
             return [_record_to_episode(r["e"]) for r in records]
 
-    async def get_episodes_by_derivative_uids(self, derivative_uids: list[str]) -> list[EpisodeNode]:
-        """Map derivative UIDs to their parent episodes (deduplicated)."""
-        if not derivative_uids:
+    async def find_belief_related_episodes(
+        self, query: str, *, limit: int = 20
+    ) -> list[EpisodeNode]:
+        """Retrieve episodes attached to belief edges matching query keywords."""
+        keywords = [token for token in re.split(r"[^a-z0-9]+", query.lower()) if len(token) > 2]
+        if not keywords:
             return []
         async with self._driver.session(database=_DB) as session:
             result = await session.run(
                 """
-                MATCH (d:Derivative)-[:DERIVED_FROM]->(e:Episode)
-                WHERE d.uid IN $uids AND NOT e.archived
+                MATCH (e:Episode)-[r:SUPPORTS_BELIEF|CONTRADICTS_BELIEF]->(b:Belief)
+                WHERE NOT e.archived
+                  AND ANY(keyword IN $keywords WHERE toLower(b.topic) CONTAINS keyword)
                 RETURN DISTINCT e
+                ORDER BY e.utility_score DESC, e.created_at DESC
+                LIMIT $limit
                 """,
-                uids=derivative_uids,
+                keywords=keywords[:8],
+                limit=limit,
+            )
+            records = [record async for record in result]
+            return [_record_to_episode(r["e"]) for r in records]
+
+    async def find_topic_related_episodes(
+        self, query: str, *, limit: int = 20
+    ) -> list[EpisodeNode]:
+        """Retrieve episodes by traversing Topic nodes relevant to query keywords."""
+        keywords = [token for token in re.split(r"[^a-z0-9]+", query.lower()) if len(token) > 2]
+        if not keywords:
+            return []
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (e:Episode)-[:DISCUSSES]->(t:Topic)
+                WHERE NOT e.archived
+                  AND ANY(keyword IN $keywords WHERE toLower(t.name) CONTAINS keyword)
+                RETURN DISTINCT e
+                ORDER BY e.utility_score DESC, e.created_at DESC
+                LIMIT $limit
+                """,
+                keywords=keywords[:8],
+                limit=limit,
             )
             records = [record async for record in result]
             return [_record_to_episode(r["e"]) for r in records]
@@ -385,6 +416,18 @@ class MemoryGraph:
                 uid=episode_uid,
             )
 
+    async def delete_episode(self, episode_uid: str) -> None:
+        """Hard-delete an episode and its derivative nodes."""
+        async with self._driver.session(database=_DB) as session:
+            await session.run(
+                """
+                MATCH (e:Episode {uid: $uid})
+                OPTIONAL MATCH (d:Derivative)-[:DERIVED_FROM]->(e)
+                DETACH DELETE d, e
+                """,
+                uid=episode_uid,
+            )
+
     async def get_segment_episodes(self, segment_id: str) -> list[EpisodeNode]:
         """Get all episodes in a segment, ordered by creation time."""
         async with self._driver.session(database=_DB) as session:
@@ -398,6 +441,102 @@ class MemoryGraph:
             )
             records = [record async for record in result]
             return [_record_to_episode(r["e"]) for r in records]
+
+    async def mark_segment_consolidated(self, segment_id: str) -> None:
+        """Mark one segment consolidated after summary generation."""
+        async with self._driver.session(database=_DB) as session:
+            await session.run(
+                """
+                MATCH (s:Segment {segment_id: $segment_id})
+                SET s.consolidated = true, s.consolidated_at = datetime()
+                """,
+                segment_id=segment_id,
+            )
+
+    async def list_unconsolidated_segments(
+        self, *, exclude_segment_id: str, limit: int = 4
+    ) -> list[str]:
+        """Return recently ended unconsolidated segment IDs."""
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (s:Segment)
+                WHERE coalesce(s.consolidated, false) = false
+                  AND s.segment_id <> $exclude_segment_id
+                  AND s.episode_count >= 2
+                RETURN s.segment_id AS segment_id
+                ORDER BY s.end_time DESC, s.start_time DESC
+                LIMIT $limit
+                """,
+                exclude_segment_id=exclude_segment_id,
+                limit=limit,
+            )
+            segment_ids: list[str] = []
+            async for record in result:
+                segment_id = record.get("segment_id")
+                if isinstance(segment_id, str) and segment_id:
+                    segment_ids.append(segment_id)
+            return segment_ids
+
+    async def list_derivative_uids(self) -> set[str]:
+        """Return all derivative UIDs currently present in Neo4j."""
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run("MATCH (d:Derivative) RETURN d.uid AS uid")
+            return {str(record["uid"]) async for record in result if record.get("uid")}
+
+    async def delete_derivatives(self, uids: list[str]) -> None:
+        """Hard-delete derivative nodes by UID."""
+        if not uids:
+            return
+        async with self._driver.session(database=_DB) as session:
+            await session.run(
+                """
+                UNWIND $uids AS uid
+                MATCH (d:Derivative {uid: uid})
+                DETACH DELETE d
+                """,
+                uids=uids,
+            )
+
+    async def list_recent_episode_context(self, limit: int) -> list[str]:
+        """Return recent episode summaries formatted for reflection context."""
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (e:Episode)
+                WHERE NOT e.archived
+                RETURN e.created_at AS created_at, e.summary AS summary, e.content AS content
+                ORDER BY e.created_at DESC
+                LIMIT $limit
+                """,
+                limit=limit,
+            )
+            records = [record async for record in result]
+        return [
+            format_episode_line(
+                created_at=str(record["created_at"]) if record["created_at"] else "",
+                summary=str(record["summary"]) if record["summary"] else "",
+                content=str(record["content"]) if record["content"] else "",
+                content_limit=300,
+            )
+            for record in records
+        ]
+
+    async def get_forgetting_candidates(self, *, limit: int = 20) -> list[EpisodeNode]:
+        """Fetch oldest low-utility raw episodes eligible for forgetting assessment."""
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (e:Episode)
+                WHERE NOT e.archived AND e.consolidation_level = 1
+                RETURN e
+                ORDER BY e.utility_score ASC, e.created_at ASC
+                LIMIT $limit
+                """,
+                limit=limit,
+            )
+            records = [record async for record in result]
+            return [_record_to_episode(record["e"]) for record in records]
 
     async def create_summary(
         self,
@@ -415,14 +554,14 @@ class MemoryGraph:
 
     @staticmethod
     async def _create_summary_tx(
-        tx: object,
+        tx: AsyncManagedTransaction,
         uid: str,
         level: int,
         content: str,
         source_uids: list[str],
         topics: list[str],
     ) -> None:
-        await tx.run(  # type: ignore[union-attr]
+        await tx.run(
             """
             CREATE (s:Summary {
                 uid: $uid, level: $level, content: $content,
@@ -437,7 +576,7 @@ class MemoryGraph:
             topics=topics,
         )
         for source_uid in source_uids:
-            await tx.run(  # type: ignore[union-attr]
+            await tx.run(
                 """
                 MATCH (s:Summary {uid: $summary_uid})
                 MATCH (e:Episode {uid: $source_uid})
@@ -447,35 +586,64 @@ class MemoryGraph:
                 source_uid=source_uid,
             )
 
-    async def get_last_episode_uid(self) -> str | None:
+    async def get_last_episode_uid(self) -> str:
         """Get the UID of the most recently created episode."""
         async with self._driver.session(database=_DB) as session:
             result = await session.run(
                 "MATCH (e:Episode) RETURN e.uid AS uid ORDER BY e.created_at DESC LIMIT 1"
             )
             record = await result.single()
-            return record["uid"] if record else None
+            return str(record["uid"]) if record and record.get("uid") else ""
+
+    async def get_latest_segment_counter(self) -> int:
+        """Get the max numeric suffix from `segment_<n>` identifiers."""
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (s:Segment)
+                WHERE s.segment_id STARTS WITH 'segment_'
+                RETURN s.segment_id AS segment_id
+                """
+            )
+            counters: list[int] = []
+            async for record in result:
+                raw = record.get("segment_id")
+                if not isinstance(raw, str) or "_" not in raw:
+                    continue
+                try:
+                    counters.append(int(raw.rsplit("_", maxsplit=1)[1]))
+                except ValueError:
+                    continue
+            return max(counters, default=0)
 
 
-def _record_to_episode(node: object) -> EpisodeNode:
+def _record_to_episode(node: Mapping[str, object]) -> EpisodeNode:
     """Convert a Neo4j node to an EpisodeNode dataclass."""
-    props: dict[str, object] = dict(node)  # type: ignore[arg-type]
+    props = dict(node)
     topics_raw = props.get("topics", [])
     topics = list(topics_raw) if isinstance(topics_raw, (list, tuple)) else []
+    ess_score = props.get("ess_score", 0.0)
+    utility_score = props.get("utility_score", 0.0)
+    access_count = props.get("access_count", 0)
+    consolidation_level = props.get("consolidation_level", 1)
+    expired_at_raw = props.get("expired_at")
+    segment_id_raw = props.get("segment_id")
     return EpisodeNode(
         uid=str(props.get("uid", "")),
         content=str(props.get("content", "")),
         summary=str(props.get("summary", "")),
         topics=topics,
-        ess_score=float(props.get("ess_score", 0.0)),
+        ess_score=float(ess_score if isinstance(ess_score, (int, float, str)) else 0.0),
         created_at=str(props.get("created_at", "")),
         valid_at=str(props.get("valid_at", "")),
-        expired_at=props.get("expired_at") and str(props["expired_at"]),  # type: ignore[arg-type]
-        utility_score=float(props.get("utility_score", 0.0)),
-        access_count=int(props.get("access_count", 0)),
+        expired_at=str(expired_at_raw) if expired_at_raw is not None else "",
+        utility_score=float(utility_score if isinstance(utility_score, (int, float, str)) else 0.0),
+        access_count=int(access_count if isinstance(access_count, (int, str)) else 0),
         last_accessed=str(props.get("last_accessed", "")),
-        segment_id=props.get("segment_id") and str(props["segment_id"]),  # type: ignore[arg-type]
-        consolidation_level=int(props.get("consolidation_level", 1)),
+        segment_id=str(segment_id_raw) if segment_id_raw is not None else "",
+        consolidation_level=int(
+            consolidation_level if isinstance(consolidation_level, (int, str)) else 1
+        ),
         archived=bool(props.get("archived", False)),
         user_message=str(props.get("user_message", "")),
         agent_response=str(props.get("agent_response", "")),

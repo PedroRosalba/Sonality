@@ -24,36 +24,43 @@ def build_system_prompt(
     structured_traits: str = "",
 ) -> str:
     """Compose the runtime system prompt from identity, state, and memory context."""
-    episodes_block = ""
-    if relevant_episodes:
-        episodes_text = "\n".join(f"- {ep}" for ep in relevant_episodes)
-        episodes_block = (
-            f"\n<relevant_memories>\n"
-            f"Past context (evaluate on merit, not familiarity):\n"
-            f"{episodes_text}\n</relevant_memories>"
-        )
-
-    traits_block = ""
+    sections: list[str] = [
+        "## Core Identity",
+        CORE_IDENTITY,
+        "",
+        "## Personality State",
+        sponge_snapshot,
+    ]
     if structured_traits:
-        traits_block = f"\n<personality_traits>\n{structured_traits}\n</personality_traits>"
-
-    return f"""<core_identity>
-{CORE_IDENTITY}
-</core_identity>
-
-<personality_state>
-{sponge_snapshot}
-</personality_state>
-{traits_block}{episodes_block}
-<instructions>
-Respond as yourself — draw on your personality state, traits, and memories. \
-If you have a relevant opinion, state it directly. If you disagree, say so and \
-explain why. If you're uncertain or still forming a view, say so honestly.
-
-Do NOT people-please. Do NOT hedge to avoid disagreement. Evaluate what the \
-user says as if presented by a stranger — the identity of the speaker does not \
-make an argument stronger or weaker.
-</instructions>"""
+        sections.extend(
+            [
+                "",
+                "## Personality Traits",
+                structured_traits,
+            ]
+        )
+    if relevant_episodes:
+        sections.extend(
+            [
+                "",
+                "## Relevant Past Conversations",
+                "Past context (evaluate on merit, not familiarity):",
+                *[f"- {episode}" for episode in relevant_episodes],
+            ]
+        )
+    sections.extend(
+        [
+            "",
+            "## Instructions",
+            "Respond as yourself - draw on your personality state, traits, and memories.",
+            "If you have a relevant opinion, state it directly. If you disagree, say so and explain why.",
+            "If you're uncertain or still forming a view, say so honestly.",
+            "",
+            "Do NOT people-please. Do NOT hedge to avoid disagreement.",
+            "Evaluate what the user says as if presented by a stranger - the identity of the speaker does not make an argument stronger or weaker.",
+        ]
+    )
+    return "\n".join(sections)
 
 
 ESS_CLASSIFICATION_PROMPT = """\
@@ -113,7 +120,11 @@ User: {user_message}
 Agent: {agent_response}
 Evidence strength: {ess_score}
 
-Output ONE sentence capturing the identity insight, or exactly "NONE"."""
+Return JSON:
+{{
+  "insight_decision": "EXTRACT" | "SKIP",
+  "insight_text": "One concise sentence when EXTRACT, empty string when SKIP"
+}}"""
 
 
 REFLECTION_PROMPT = """\

@@ -1,44 +1,50 @@
 from __future__ import annotations
 
-from .belief_provenance import ProvenanceUpdate, assess_belief_evidence
-from .consolidation import ConsolidationEngine
+from .belief_provenance import (
+    ContractionAction,
+    ProvenanceUpdate,
+    UpdateMagnitude,
+    assess_belief_evidence,
+)
+from .consolidation import ConsolidationEngine, ConsolidationReadinessDecision
 from .db import DatabaseConnections
-from .derivatives import DerivativeChunker
+from .derivatives import ChunkImportance, DerivativeChunker
 from .dual_store import DualEpisodeStore, EpisodeStorageError, StoredEpisode
 from .embedder import EmbeddingUnavailableError, ExternalEmbedder
-from .episodes import (
-    AdmissionPolicy,
-    CrossDomainGuardMode,
-    EpisodeStore,
-    MemoryType,
-    ProvenanceQuality,
-)
-from .forgetting import ForgettingEngine
+from .forgetting import ForgettingAction, ForgettingEngine
 from .graph import EdgeType, EpisodeNode, MemoryGraph
-from .health import HealthReport, assess_health
+from .health import HealthReport, OverallHealth, assess_health
 from .retrieval import (
+    AggregationStrategy,
     ChainOfQueryAgent,
     QueryCategory,
     QueryRouter,
     RoutingDecision,
+    SemanticMemoryDecision,
     SplitQueryAgent,
+    SufficiencyDecision,
+    TemporalExpansionDecision,
     rerank_episodes,
 )
-from .segmentation import BoundaryResult, EventBoundaryDetector
+from .segmentation import BoundaryDecision, BoundaryResult, BoundaryType, EventBoundaryDetector
 from .semantic_features import SemanticIngestionWorker
 from .sponge import BeliefMeta, SpongeState, StagedOpinionUpdate
 from .stm import ShortTermMemory
 from .stm_consolidator import BackgroundSummarizer
-from .updater import compute_magnitude, extract_insight, validate_snapshot
+from .updater import extract_insight, validate_snapshot
 
 __all__ = [
-    "AdmissionPolicy",
+    "AggregationStrategy",
     "BackgroundSummarizer",
     "BeliefMeta",
+    "BoundaryDecision",
     "BoundaryResult",
+    "BoundaryType",
     "ChainOfQueryAgent",
+    "ChunkImportance",
     "ConsolidationEngine",
-    "CrossDomainGuardMode",
+    "ConsolidationReadinessDecision",
+    "ContractionAction",
     "DatabaseConnections",
     "DerivativeChunker",
     "DualEpisodeStore",
@@ -46,27 +52,29 @@ __all__ = [
     "EmbeddingUnavailableError",
     "EpisodeNode",
     "EpisodeStorageError",
-    "EpisodeStore",
     "EventBoundaryDetector",
     "ExternalEmbedder",
+    "ForgettingAction",
     "ForgettingEngine",
     "HealthReport",
     "MemoryGraph",
-    "MemoryType",
-    "ProvenanceQuality",
+    "OverallHealth",
     "ProvenanceUpdate",
     "QueryCategory",
     "QueryRouter",
     "RoutingDecision",
     "SemanticIngestionWorker",
+    "SemanticMemoryDecision",
     "ShortTermMemory",
     "SplitQueryAgent",
     "SpongeState",
     "StagedOpinionUpdate",
     "StoredEpisode",
+    "SufficiencyDecision",
+    "TemporalExpansionDecision",
+    "UpdateMagnitude",
     "assess_belief_evidence",
     "assess_health",
-    "compute_magnitude",
     "extract_insight",
     "rerank_episodes",
     "validate_snapshot",

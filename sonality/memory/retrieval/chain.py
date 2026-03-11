@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ... import config
 from ...llm.caller import llm_call
@@ -20,11 +21,23 @@ from ..graph import EpisodeNode, MemoryGraph
 log = logging.getLogger(__name__)
 
 
+class SufficiencyDecision(StrEnum):
+    SUFFICIENT = "SUFFICIENT"
+    INSUFFICIENT = "INSUFFICIENT"
+
+
 class SufficiencyResponse(BaseModel):
-    is_sufficient: bool
+    sufficiency_decision: SufficiencyDecision = SufficiencyDecision.INSUFFICIENT
     confidence: float = 0.0
     reasoning: str = ""
-    suggested_refinement: str | None = None
+    suggested_refinement: str = ""
+
+    @field_validator("suggested_refinement", mode="before")
+    @classmethod
+    def _coerce_suggested_refinement(cls, value: object) -> str:
+        if value is None:
+            return ""
+        return value if isinstance(value, str) else str(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,18 +78,21 @@ class ChainOfQueryAgent:
 
             # LLM sufficiency check
             context = "\n\n".join(
-                f"[{ep.created_at}] {ep.summary or ep.content[:200]}"
-                for ep in all_episodes
+                f"[{ep.created_at}] {ep.summary or ep.content[:200]}" for ep in all_episodes
             )
             sufficiency = self._check_sufficiency(query, context)
 
             if sufficiency.confidence > best_confidence:
                 best_confidence = sufficiency.confidence
 
-            if sufficiency.is_sufficient and sufficiency.confidence >= self._confidence_threshold:
+            if (
+                sufficiency.sufficiency_decision is SufficiencyDecision.SUFFICIENT
+                and sufficiency.confidence >= self._confidence_threshold
+            ):
                 log.info(
                     "Chain retrieval sufficient after %d iterations (conf=%.2f)",
-                    iteration, sufficiency.confidence,
+                    iteration,
+                    sufficiency.confidence,
                 )
                 return ChainResult(
                     episodes=all_episodes,
@@ -93,7 +109,8 @@ class ChainOfQueryAgent:
 
         log.info(
             "Chain retrieval exhausted %d iterations (best conf=%.2f)",
-            self._max_iterations, best_confidence,
+            self._max_iterations,
+            best_confidence,
         )
         return ChainResult(
             episodes=all_episodes,
@@ -107,9 +124,8 @@ class ChainOfQueryAgent:
         result = llm_call(
             prompt=prompt,
             response_model=SufficiencyResponse,
-            fallback=SufficiencyResponse(is_sufficient=False, confidence=0.0),
+            fallback=SufficiencyResponse(),
         )
-        if result.success and result.value:
-            assert isinstance(result.value, SufficiencyResponse)
+        if result.success:
             return result.value
-        return SufficiencyResponse(is_sufficient=False, confidence=0.0)
+        return SufficiencyResponse()

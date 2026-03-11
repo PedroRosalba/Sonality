@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 
 from pydantic import BaseModel
 
@@ -20,10 +21,16 @@ from .graph import DerivativeNode
 log = logging.getLogger(__name__)
 
 
+class ChunkImportance(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
 class ChunkItem(BaseModel):
     text: str
     key_concept: str
-    importance: str = "medium"
+    importance: ChunkImportance = ChunkImportance.MEDIUM
 
 
 class ChunkingResponse(BaseModel):
@@ -57,7 +64,13 @@ class DerivativeChunker:
         chunks = self._llm_chunk(text)
         if not chunks:
             # Fallback: treat entire text as single chunk
-            chunks = [ChunkItem(text=text, key_concept="full_content", importance="medium")]
+            chunks = [
+                ChunkItem(
+                    text=text,
+                    key_concept="full_content",
+                    importance=ChunkImportance.MEDIUM,
+                )
+            ]
 
         texts = [c.text for c in chunks]
         embeddings = self._embedder.embed_documents(texts)
@@ -81,7 +94,13 @@ class DerivativeChunker:
         """Use LLM to split text into semantic chunks."""
         # Short texts don't need chunking
         if len(text) < 100:
-            return [ChunkItem(text=text, key_concept="brief_content", importance="medium")]
+            return [
+                ChunkItem(
+                    text=text,
+                    key_concept="brief_content",
+                    importance=ChunkImportance.MEDIUM,
+                )
+            ]
 
         prompt = CHUNKING_PROMPT.format(text=text)
         result = llm_call(
@@ -89,9 +108,8 @@ class DerivativeChunker:
             response_model=ChunkingResponse,
             fallback=ChunkingResponse(chunks=[]),
         )
-        if result.success and result.value:
+        if result.success:
             response = result.value
-            assert isinstance(response, ChunkingResponse)
             return response.chunks
         log.warning("LLM chunking failed: %s. Using whole text.", result.error)
         return []

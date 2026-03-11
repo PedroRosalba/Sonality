@@ -30,6 +30,13 @@ _NEO4J_INIT_STATEMENTS: list[str] = [
 ]
 
 
+async def _configure_pgvector(conn: object) -> None:
+    """Register pgvector adapters for each pooled PostgreSQL connection."""
+    from pgvector.psycopg import register_vector_async  # type: ignore[import-untyped]
+
+    await register_vector_async(conn)
+
+
 @dataclass
 class DatabaseConnections:
     """Holds Neo4j driver and PostgreSQL pool for the application lifetime."""
@@ -62,17 +69,12 @@ class DatabaseConnections:
             conninfo=config.POSTGRES_URL,
             min_size=config.PG_POOL_MIN_SIZE,
             max_size=config.PG_POOL_MAX_SIZE,
+            configure=_configure_pgvector,
             open=False,
         )
         await self.pg_pool.open()
         await self.pg_pool.wait()
-
-        # Register pgvector type
-        async with self.pg_pool.connection() as conn:
-            from pgvector.psycopg import register_vector_async
-
-            await register_vector_async(conn)
-        log.info("PostgreSQL connected (pgvector registered)")
+        log.info("PostgreSQL connected (pgvector configured)")
 
         return self
 

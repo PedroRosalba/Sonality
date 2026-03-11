@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import logging
-import math
 import shutil
 from collections import defaultdict
 from datetime import UTC, datetime
@@ -27,16 +26,11 @@ SEED_SNAPSHOT: Final = (
 MAX_RECENT_SHIFTS: Final = 10
 
 
-MAX_UPDATE_HISTORY: Final = 8
-
-
 class BeliefMeta(BaseModel):
     """Confidence and provenance for a tracked belief.
 
-    Confidence grows logarithmically with evidence, making established beliefs
-    resist change. (Bayesian belief updating — Oravecz et al. 2016; ABBEL 2025)
-    recent_updates tracks signed magnitudes for Martingale entrenchment detection
-    (NeurIPS 2025, arXiv:2512.02914).
+    Confidence follows model-assessed uncertainty rather than evidence-count
+    formulas. recent_updates tracks signed magnitudes for diagnostics.
 
     Episode provenance fields (A-MEM Zettelkasten model) link beliefs to their
     supporting/contradicting episodes for traceability. All new fields have
@@ -53,7 +47,7 @@ class BeliefMeta(BaseModel):
     supporting_episode_uids: list[str] = Field(default_factory=list)
     contradicting_episode_uids: list[str] = Field(default_factory=list)
     formed_at: int = 0
-    last_challenged_at: int | None = None
+    last_challenged_at: int = -1
     uncertainty: float = 1.0  # High initially, decreases with consistent evidence
 
 
@@ -126,8 +120,7 @@ class SpongeState(BaseModel):
         """Apply a bounded signed opinion update and refresh belief metadata.
 
         Assumes `direction` is sign-like (negative/opposing, positive/supporting)
-        and `magnitude` is non-negative. Belief confidence is derived only from
-        evidence count to keep update dynamics interpretable and auditable.
+        and `magnitude` is non-negative.
         """
         old = self.opinion_vectors.get(topic, 0.0)
         new = max(-1.0, min(1.0, old + direction * magnitude))
@@ -137,21 +130,20 @@ class SpongeState(BaseModel):
         signed = direction * magnitude
         if meta is None:
             evidence_count = max(1, evidence_increment)
-            initial_conf = min(1.0, math.log2(evidence_count + 1) / math.log2(20))
+            initial_conf = 0.2
             self.belief_meta[topic] = BeliefMeta(
                 confidence=initial_conf,
                 evidence_count=evidence_count,
                 last_reinforced=self.interaction_count,
                 provenance=provenance,
                 recent_updates=[signed],
+                uncertainty=1.0 - initial_conf,
             )
         else:
             meta.evidence_count += max(1, evidence_increment)
             meta.last_reinforced = self.interaction_count
-            meta.confidence = min(1.0, math.log2(meta.evidence_count + 1) / math.log2(20))
+            meta.confidence = max(0.0, min(1.0, 1.0 - meta.uncertainty))
             meta.recent_updates.append(signed)
-            if len(meta.recent_updates) > MAX_UPDATE_HISTORY:
-                meta.recent_updates = meta.recent_updates[-MAX_UPDATE_HISTORY:]
             if provenance:
                 meta.provenance = provenance
 
@@ -237,54 +229,6 @@ class SpongeState(BaseModel):
             )
             applied.append(f"{topic}:{net:+.4f} ({evidence_increment} staged)")
         return applied
-
-    def decay_beliefs(self, decay_rate: float = 0.15, min_confidence: float = 0.05) -> list[str]:
-        """Power-law decay for unreinforced beliefs. Returns dropped topic names.
-
-        R(t) = (1 + gap)^(-β) with a reinforcement floor so well-evidenced
-        beliefs persist. (Ebbinghaus forgetting curve; FadeMem 2025; SAGE 2024)
-        """
-        dropped: list[str] = []
-        for topic in list(self.belief_meta):
-            meta = self.belief_meta[topic]
-            gap = self.interaction_count - meta.last_reinforced
-            if gap < 5:
-                continue
-            retention = (1 + gap) ** (-decay_rate)
-            # Keep only well-reinforced beliefs sticky; single-hit beliefs should
-            # be able to decay out naturally.
-            floor = min(0.6, max(0.0, (meta.evidence_count - 1) * 0.04))
-            new_conf = max(floor, meta.confidence * retention)
-            if new_conf < min_confidence:
-                dropped.append(topic)
-                del self.belief_meta[topic]
-                del self.opinion_vectors[topic]
-                log.info("Belief '%s' decayed below threshold, removed", topic)
-            else:
-                meta.confidence = new_conf
-        return dropped
-
-    def detect_entrenched_beliefs(self, min_updates: int = 4) -> list[str]:
-        """Detect beliefs where updates are predictable from current position.
-
-        Martingale property (NeurIPS 2025, arXiv:2512.02914): under rational
-        updating, future belief changes should be unpredictable from current
-        belief. When >75% of recent updates agree with the sign of the current
-        position, the belief is entrenching rather than truth-seeking.
-        """
-        entrenched: list[str] = []
-        for topic, meta in self.belief_meta.items():
-            if len(meta.recent_updates) < min_updates:
-                continue
-            pos = self.opinion_vectors.get(topic, 0.0)
-            if abs(pos) < 0.2:
-                continue
-            pos_sign = 1.0 if pos > 0 else -1.0
-            agreeing = sum(1 for u in meta.recent_updates if u * pos_sign > 0)
-            ratio = agreeing / len(meta.recent_updates)
-            if ratio > 0.75:
-                entrenched.append(topic)
-        return entrenched
 
     def record_shift(self, description: str, magnitude: float) -> None:
         """Append a bounded history entry describing a personality change."""

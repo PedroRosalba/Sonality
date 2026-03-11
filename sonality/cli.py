@@ -6,8 +6,6 @@ import json
 import logging
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
-from typing import Literal
 
 from . import config
 from .agent import SonalityAgent
@@ -19,7 +17,7 @@ def _print_status(agent: SonalityAgent) -> None:
     ess = agent.last_ess
     score_str = f"{ess.score:.2f}" if ess else "n/a"
     topics = ", ".join(ess.topics) if ess and ess.topics else ""
-    updated = ess and ess.score > config.ESS_THRESHOLD
+    updated = bool(ess and (ess.topics or ess.opinion_direction.sign != 0.0))
     parts = [
         f"ESS {score_str}",
         f"v{agent.sponge.version}",
@@ -48,7 +46,7 @@ def _show_health(agent: SonalityAgent) -> None:
     else:
         maturity = "Layer 3 (autonomous expansion)"
 
-    entrenched = s.detect_entrenched_beliefs()
+    entrenched = agent._current_entrenched_topics()
     contradictions = agent._collect_unresolved_contradictions()
     contradiction_line = ", ".join(contradictions[:3]) if contradictions else "none"
     recent = s.recent_shifts[-1] if s.recent_shifts else None
@@ -120,7 +118,7 @@ def _show_sponge(agent: SonalityAgent) -> None:
 
 def _show_snapshot(agent: SonalityAgent) -> None:
     """Print the current narrative snapshot text."""
-    print(f"\n  {agent.sponge.snapshot}")
+    print(f"  {agent.sponge.snapshot}")
 
 
 def _show_beliefs(agent: SonalityAgent) -> None:
@@ -180,19 +178,17 @@ def _reset(agent: SonalityAgent) -> None:
     agent.sponge = SpongeState()
     agent.sponge.save(config.SPONGE_FILE, config.SPONGE_HISTORY_DIR)
     agent.conversation.clear()
-    agent.previous_snapshot = None
+    agent.previous_snapshot = ""
     print("  Sponge reset to seed state.")
 
 
 def _show_models(agent: SonalityAgent) -> None:
     """Print active base URL and model selections for this runtime."""
-    print(f"  API variant:{config.API_VARIANT}")
     print(f"  Base URL:   {config.BASE_URL}")
     print(f"  Model:      {agent.model}")
     print(f"  ESS model:  {agent.ess_model}")
 
 
-CommandResult = Literal["handled", "chat", "quit"]
 CommandHandler = Callable[[SonalityAgent], None]
 
 COMMAND_HANDLERS: dict[str, CommandHandler] = {
@@ -210,16 +206,12 @@ COMMAND_HANDLERS: dict[str, CommandHandler] = {
 }
 
 
-@dataclass(frozen=True, slots=True)
-class CliArgs:
-    """CLI runtime overrides for model selection."""
-
-    model: str
-    ess_model: str
-
-
-def _parse_args() -> CliArgs:
-    """Parse CLI arguments for runtime model selection overrides."""
+def main() -> None:
+    """Run the interactive Sonality REPL."""
+    logging.basicConfig(
+        level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
+        format="%(levelname)s %(name)s: %(message)s",
+    )
     parser = argparse.ArgumentParser(
         prog="sonality",
         description="Interactive Sonality REPL",
@@ -234,33 +226,17 @@ def _parse_args() -> CliArgs:
         default=config.ESS_MODEL,
         help="ESS/insight/reflection model ID.",
     )
-    parsed = parser.parse_args()
-    return CliArgs(
-        model=parsed.model,
-        ess_model=parsed.ess_model,
-    )
-
-
-def _configure_logging() -> None:
-    """Initialize CLI logging from environment-backed configuration."""
-    logging.basicConfig(
-        level=getattr(logging, config.LOG_LEVEL.upper(), logging.INFO),
-        format="%(levelname)s %(name)s: %(message)s",
-    )
-
-
-def _require_api_config() -> None:
-    """Exit process when required API configuration is not configured."""
+    args = parser.parse_args()
     missing = config.missing_live_api_config()
-    if not missing:
-        return
-    print(f"Error: set {', '.join(missing)} in .env or environment.")
-    print("  cp .env.example .env && $EDITOR .env")
-    sys.exit(1)
+    if missing:
+        print(f"Error: set {', '.join(missing)} in .env or environment.")
+        print("  cp .env.example .env && $EDITOR .env")
+        sys.exit(1)
 
-
-def _print_banner(agent: SonalityAgent) -> None:
-    """Print startup banner with persisted sponge metadata."""
+    agent = SonalityAgent(
+        model=args.model,
+        ess_model=args.ess_model,
+    )
     print(
         BANNER.format(
             version=agent.sponge.version,
@@ -270,34 +246,6 @@ def _print_banner(agent: SonalityAgent) -> None:
             ess_model=agent.ess_model,
         )
     )
-
-
-def _handle_command(agent: SonalityAgent, command: str) -> CommandResult:
-    """Handle slash-command input and return next REPL action."""
-    if command == "/quit":
-        print("Goodbye.")
-        return "quit"
-    if not command.startswith("/"):
-        return "chat"
-    handler = COMMAND_HANDLERS.get(command)
-    if handler is None:
-        print(f"  Unknown command: {command}")
-        return "handled"
-    handler(agent)
-    return "handled"
-
-
-def main() -> None:
-    """Run the interactive Sonality REPL."""
-    _configure_logging()
-    cli_args = _parse_args()
-    _require_api_config()
-
-    agent = SonalityAgent(
-        model=cli_args.model,
-        ess_model=cli_args.ess_model,
-    )
-    _print_banner(agent)
 
     while True:
         try:
@@ -309,10 +257,16 @@ def main() -> None:
         if not user_input:
             continue
 
-        command_result = _handle_command(agent, user_input.lower())
-        if command_result == "quit":
+        command = user_input.lower()
+        if command == "/quit":
+            print("Goodbye.")
             break
-        if command_result == "handled":
+        if command.startswith("/"):
+            handler = COMMAND_HANDLERS.get(command)
+            if handler is None:
+                print(f"  Unknown command: {command}")
+            else:
+                handler(agent)
             continue
 
         print()

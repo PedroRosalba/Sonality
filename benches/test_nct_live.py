@@ -24,13 +24,11 @@ class TestNCTLive:
         with tempfile.TemporaryDirectory() as td:
             sponge_path = Path(td) / "sponge.json"
             history_path = Path(td) / "history"
-            chroma_path = Path(td) / "chromadb"
             audit_path = Path(td) / "ess_log.jsonl"
 
             with (
                 mock.patch.object(config, "SPONGE_FILE", sponge_path),
                 mock.patch.object(config, "SPONGE_HISTORY_DIR", history_path),
-                mock.patch.object(config, "CHROMADB_DIR", chroma_path),
                 mock.patch.object(config, "ESS_AUDIT_LOG_FILE", audit_path),
             ):
                 from sonality.agent import SonalityAgent
@@ -46,7 +44,6 @@ class TestNCTLive:
             with (
                 mock.patch.object(config, "SPONGE_FILE", sponge_path),
                 mock.patch.object(config, "SPONGE_HISTORY_DIR", history_path),
-                mock.patch.object(config, "CHROMADB_DIR", chroma_path),
                 mock.patch.object(config, "ESS_AUDIT_LOG_FILE", audit_path),
             ):
                 from sonality.agent import SonalityAgent
@@ -69,7 +66,6 @@ class TestNCTLive:
         with tempfile.TemporaryDirectory() as td:
             sponge_path = Path(td) / "sponge.json"
             history_path = Path(td) / "history"
-            chroma_path = Path(td) / "chromadb"
             audit_path = Path(td) / "ess_log.jsonl"
 
             responses = []
@@ -77,7 +73,6 @@ class TestNCTLive:
                 with (
                     mock.patch.object(config, "SPONGE_FILE", sponge_path),
                     mock.patch.object(config, "SPONGE_HISTORY_DIR", history_path),
-                    mock.patch.object(config, "CHROMADB_DIR", chroma_path),
                     mock.patch.object(config, "ESS_AUDIT_LOG_FILE", audit_path),
                 ):
                     from sonality.agent import SonalityAgent

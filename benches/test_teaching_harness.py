@@ -3,8 +3,9 @@ from __future__ import annotations
 import json
 from collections.abc import Mapping, Sequence
 from enum import StrEnum
+from pathlib import Path
 from types import MappingProxyType
-from typing import Literal
+from typing import Literal, cast
 
 import pytest
 
@@ -18,6 +19,8 @@ from .teaching_harness import (
     BudgetStatus,
     DecisionContext,
     MetricOutcome,
+    MetricGate,
+    PackDefinition,
     PackRunResult,
     RareEventEvidenceStatus,
     ReplicateExecutionResult,
@@ -339,10 +342,11 @@ def test_run_isolation_report_counts_seed_snapshot_failures() -> None:
         }
     ]
     report = harness._run_isolation_report("run_id", "lean", rows)
-    summary = report["summary"]
+    summary = cast(dict[str, object], report["summary"])
     assert summary["seed_snapshot_fail_count"] == 1
     assert summary["overall_status"] == "critical"
-    per_pack = report["per_pack"][0]
+    per_pack_rows = cast(list[dict[str, object]], report["per_pack"])
+    per_pack = per_pack_rows[0]
     assert per_pack["seed_snapshot_fail_count"] == 1
 
 
@@ -378,14 +382,15 @@ def test_memory_validity_report_aggregates_key_violation_signals() -> None:
         },
     ]
     report = harness._memory_validity_report("run_id", "lean", rows)
-    summary = report["summary"]
+    summary = cast(dict[str, object], report["summary"])
     assert summary["rows_total"] == 3
     assert summary["update_policy_violation_count"] == 1
     assert summary["direction_mismatch_count"] == 1
     assert summary["low_ess_write_count"] == 1
-    assert "continuity" in report["release_signals"]["packs_with_update_policy_violations"]
-    assert "continuity" in report["release_signals"]["packs_with_low_ess_writes"]
-    assert "continuity" in report["release_signals"]["packs_with_direction_mismatches"]
+    release_signals = cast(dict[str, object], report["release_signals"])
+    assert "continuity" in cast(list[str], release_signals["packs_with_update_policy_violations"])
+    assert "continuity" in cast(list[str], release_signals["packs_with_low_ess_writes"])
+    assert "continuity" in cast(list[str], release_signals["packs_with_direction_mismatches"])
 
 
 def test_memory_validity_report_includes_belief_topic_rollups() -> None:
@@ -423,12 +428,15 @@ def test_memory_validity_report_includes_belief_topic_rollups() -> None:
         rows,
         belief_rows=belief_rows,
     )
-    summary = report["summary"]
+    summary = cast(dict[str, object], report["summary"])
     assert summary["belief_topic_count"] == 2
-    assert summary["top_belief_topic_deltas"][0]["topic"] == "feature flags"
-    per_pack_row = report["per_pack"][0]
+    top_deltas = cast(list[dict[str, object]], summary["top_belief_topic_deltas"])
+    assert top_deltas[0]["topic"] == "feature flags"
+    per_pack_rows = cast(list[dict[str, object]], report["per_pack"])
+    per_pack_row = per_pack_rows[0]
     assert per_pack_row["belief_topic_count"] == 2
-    assert per_pack_row["top_belief_topic_deltas"][0]["topic"] == "feature flags"
+    per_pack_deltas = cast(list[dict[str, object]], per_pack_row["top_belief_topic_deltas"])
+    assert per_pack_deltas[0]["topic"] == "feature flags"
 
 
 def test_belief_memory_alignment_report_joins_topic_and_validity_risks() -> None:
@@ -466,12 +474,16 @@ def test_belief_memory_alignment_report_joins_topic_and_validity_risks() -> None
         validity_rows=validity_rows,
         belief_rows=belief_rows,
     )
-    assert report["summary"]["overall_status"] == "critical"
-    assert report["summary"]["topic_count"] == 2
-    assert report["release_signals"]["packs_with_policy_violation_topics"] == ["continuity"]
-    assert report["top_risky_topics"][0]["topic"] == "safety"
-    assert report["per_pack"][0]["pack"] == "continuity"
-    assert report["per_pack"][0]["policy_violation_count"] == 1
+    summary = cast(dict[str, object], report["summary"])
+    release_signals = cast(dict[str, object], report["release_signals"])
+    top_risky_topics = cast(list[dict[str, object]], report["top_risky_topics"])
+    per_pack_rows = cast(list[dict[str, object]], report["per_pack"])
+    assert summary["overall_status"] == "critical"
+    assert summary["topic_count"] == 2
+    assert cast(list[str], release_signals["packs_with_policy_violation_topics"]) == ["continuity"]
+    assert top_risky_topics[0]["topic"] == "safety"
+    assert per_pack_rows[0]["pack"] == "continuity"
+    assert per_pack_rows[0]["policy_violation_count"] == 1
 
 
 def test_resolve_benchmark_packs_group_scopes_memory_slice() -> None:
@@ -652,29 +664,31 @@ def test_collect_replicate_steps_runs_only_selected_packs(
         pack_group="all",
         pack_keys=("continuity", "memory_structure"),
     )
-    metric_samples = {f"pack_{pack.key}": [] for pack in selected_packs}
+    metric_samples: dict[str, list[bool]] = {f"pack_{pack.key}": [] for pack in selected_packs}
     collections = _empty_row_collections()
     seen_pack_keys: list[str] = []
 
     def _fake_run_pack(
         *,
-        pack,
-        replicate,
-        run_id,
-        progress,
-        ess_min_slack,
-        ess_max_slack,
-    ):
-        seen_pack_keys.append(pack.key)
+        pack: object,
+        replicate: int,
+        run_id: str,
+        progress: str,
+        ess_min_slack: float,
+        ess_max_slack: float,
+    ) -> PackRunResult:
+        _ = (run_id, progress, ess_min_slack, ess_max_slack)
+        pack_key = str(getattr(pack, "key", "unknown"))
+        seen_pack_keys.append(pack_key)
         return PackRunResult(
-            pack_key=pack.key,
+            pack_key=pack_key,
             replicate=replicate,
             passed_steps=1,
             total_steps=1,
             pass_rate=1.0,
             gate_passed=True,
             hard_failures=[],
-            steps=[_step(label=f"{pack.key}_step", version_before=0, version_after=1)],
+            steps=[_step(label=f"{pack_key}_step", version_before=0, version_after=1)],
         )
 
     monkeypatch.setattr(harness, "_run_pack", _fake_run_pack)
@@ -702,30 +716,32 @@ def test_collect_replicate_steps_fail_fast_short_circuits_remaining_packs(
         pack_group="all",
         pack_keys=("continuity", "memory_structure", "source_vigilance"),
     )
-    metric_samples = {f"pack_{pack.key}": [] for pack in selected_packs}
+    metric_samples: dict[str, list[bool]] = {f"pack_{pack.key}": [] for pack in selected_packs}
     collections = _empty_row_collections()
     seen_pack_keys: list[str] = []
 
     def _fake_run_pack(
         *,
-        pack,
-        replicate,
-        run_id,
-        progress,
-        ess_min_slack,
-        ess_max_slack,
-    ):
-        seen_pack_keys.append(pack.key)
-        gate_passed = pack.key == "source_vigilance"
+        pack: object,
+        replicate: int,
+        run_id: str,
+        progress: str,
+        ess_min_slack: float,
+        ess_max_slack: float,
+    ) -> PackRunResult:
+        _ = (run_id, progress, ess_min_slack, ess_max_slack)
+        pack_key = str(getattr(pack, "key", "unknown"))
+        seen_pack_keys.append(pack_key)
+        gate_passed = pack_key == "source_vigilance"
         return PackRunResult(
-            pack_key=pack.key,
+            pack_key=pack_key,
             replicate=replicate,
             passed_steps=1 if gate_passed else 0,
             total_steps=1,
             pass_rate=1.0 if gate_passed else 0.0,
             gate_passed=gate_passed,
-            hard_failures=[] if gate_passed else [f"{pack.key} failed gate"],
-            steps=[_step(label=f"{pack.key}_step", version_before=0, version_after=1)],
+            hard_failures=[] if gate_passed else [f"{pack_key} failed gate"],
+            steps=[_step(label=f"{pack_key}_step", version_before=0, version_after=1)],
         )
 
     monkeypatch.setattr(harness, "_run_pack", _fake_run_pack)
@@ -745,13 +761,14 @@ def test_collect_replicate_steps_fail_fast_short_circuits_remaining_packs(
     assert metric_samples["pack_source_vigilance"] == [False]
     skipped_row = next(row for row in collections.pack_rows if row["pack"] == "source_vigilance")
     assert skipped_row["pass_rate"] == 0.0
-    assert any("fail-fast short-circuit" in failure for failure in skipped_row["hard_failures"])
+    skipped_hard_failures = cast(list[str], skipped_row["hard_failures"])
+    assert any("fail-fast short-circuit" in failure for failure in skipped_hard_failures)
     assert len(steps) == 2
 
 
 def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     """Test that top-level benchmark run respects selected pack scoping."""
     selected_packs = resolve_benchmark_packs(
@@ -770,21 +787,24 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
     )
     captured: dict[str, object] = {}
 
-    def _fake_validated_run_envelope(output_root, packs):
+    def _fake_validated_run_envelope(
+        output_root: Path, packs: Sequence[PackDefinition]
+    ) -> BenchmarkRunEnvelope:
         captured["validated_output_root"] = output_root
         captured["validated_packs"] = tuple(pack.key for pack in packs)
         return envelope
 
     def _fake_run_replicates(
         *,
-        profile,
-        run_id,
-        metric_samples,
-        collections,
-        packs,
-        metric_gates,
-        progress,
-    ):
+        profile: object,
+        run_id: str,
+        metric_samples: dict[str, list[bool]],
+        collections: object,
+        packs: Sequence[PackDefinition],
+        metric_gates: Sequence[MetricGate],
+        progress: str,
+    ) -> ReplicateExecutionResult:
+        _ = (profile, run_id, collections, progress)
         captured["replicate_packs"] = tuple(pack.key for pack in packs)
         captured["metric_gate_keys"] = tuple(gate.key for gate in metric_gates)
         for key in metric_samples:
@@ -796,7 +816,13 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
             stop_rule_rows=[],
         )
 
-    def _fake_write_artifacts(*, envelope, packs, **kwargs):
+    def _fake_write_artifacts(
+        *,
+        envelope: BenchmarkRunEnvelope,
+        packs: Sequence[PackDefinition],
+        **kwargs: object,
+    ) -> None:
+        _ = kwargs
         captured["written_packs"] = tuple(pack.key for pack in packs)
         captured["written_run_dir"] = envelope.run_dir
 
@@ -840,7 +866,9 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
     assert captured["validated_packs"] == ("continuity", "memory_structure")
     assert captured["replicate_packs"] == ("continuity", "memory_structure")
     assert captured["written_packs"] == ("continuity", "memory_structure")
-    metric_gate_keys = set(captured["metric_gate_keys"])
+    metric_gate_keys_raw = captured["metric_gate_keys"]
+    assert isinstance(metric_gate_keys_raw, tuple)
+    metric_gate_keys = set(metric_gate_keys_raw)
     assert "pack_continuity" in metric_gate_keys
     assert "pack_memory_structure" in metric_gate_keys
     assert "pack_sycophancy" not in metric_gate_keys
@@ -851,7 +879,7 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
 
 def test_run_teaching_benchmark_writes_run_error_artifact_on_exception(
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     """Test that benchmark crashes persist run_error.json diagnostics."""
     selected_packs = resolve_benchmark_packs(
@@ -869,9 +897,14 @@ def test_run_teaching_benchmark_writes_run_error_artifact_on_exception(
         threshold_registry_hash="hash",
     )
 
-    monkeypatch.setattr(harness, "_validated_run_envelope", lambda output_root, packs: envelope)
+    monkeypatch.setattr(
+        harness,
+        "_validated_run_envelope",
+        lambda output_root, packs: envelope,
+    )
 
-    def _fake_run_replicates(**kwargs):
+    def _fake_run_replicates(**kwargs: object) -> ReplicateExecutionResult:
+        _ = kwargs
         raise RuntimeError("synthetic failure")
 
     monkeypatch.setattr(harness, "_run_replicates", _fake_run_replicates)
@@ -951,8 +984,8 @@ def test_build_metric_outcomes_uses_metric_specific_rare_event_targets() -> None
     assert high.rare_event_target_upper_95 == pytest.approx(0.02)
     assert high.rare_event_min_n_95 == 150
     assert high.rare_event_evidence_status is RareEventEvidenceStatus.SUFFICIENT
-    assert standard.rare_event_target_upper_95 is None
-    assert standard.rare_event_min_n_95 is None
+    assert standard.rare_event_target_upper_95 == harness.UNSET_RATE_SENTINEL
+    assert standard.rare_event_min_n_95 == harness.UNSET_COUNT_SENTINEL
     assert standard.rare_event_evidence_status is RareEventEvidenceStatus.NOT_APPLICABLE
 
 
@@ -1389,7 +1422,7 @@ def _soft_metric_outcome(
     )
 
 
-def _mixed_contract_observer_rows() -> list[dict[str, str]]:
+def _mixed_contract_observer_rows() -> list[dict[str, object]]:
     """Return deterministic observer rows with one pass and one fail verdict."""
     return [
         {
@@ -1407,7 +1440,10 @@ def _mixed_contract_observer_rows() -> list[dict[str, str]]:
 
 def test_judge_calibration_demotes_subjective_metric_when_reliability_fails() -> None:
     """Test that judge calibration demotes subjective metric when reliability fails."""
-    outcome_specs = (
+    outcome_specs: tuple[
+        tuple[str, float, int, int, float, float, float, Literal["pass", "fail", "inconclusive"]],
+        ...,
+    ] = (
         ("step_contract", 0.75, 1, 2, 0.5, 0.1, 0.9, "inconclusive"),
         ("ess_defaults_free", 0.9, 0, 2, 0.0, 0.0, 0.5, "fail"),
         ("ess_missing_defaults_free", 0.95, 2, 2, 1.0, 0.5, 1.0, "pass"),

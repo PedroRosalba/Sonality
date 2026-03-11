@@ -146,12 +146,10 @@ class TestPersistenceLive:
         with tempfile.TemporaryDirectory() as td:
             sponge_path = Path(td) / "sponge.json"
             history_path = Path(td) / "history"
-            chromadb_path = Path(td) / "chromadb"
 
             with (
                 mock.patch.object(config, "SPONGE_FILE", sponge_path),
                 mock.patch.object(config, "SPONGE_HISTORY_DIR", history_path),
-                mock.patch.object(config, "CHROMADB_DIR", chromadb_path),
                 mock.patch.object(config, "ESS_AUDIT_LOG_FILE", Path(td) / "ess_log.jsonl"),
             ):
                 from sonality.agent import SonalityAgent
@@ -168,7 +166,6 @@ class TestPersistenceLive:
             with (
                 mock.patch.object(config, "SPONGE_FILE", sponge_path),
                 mock.patch.object(config, "SPONGE_HISTORY_DIR", history_path),
-                mock.patch.object(config, "CHROMADB_DIR", chromadb_path),
                 mock.patch.object(config, "ESS_AUDIT_LOG_FILE", Path(td) / "ess_log.jsonl"),
             ):
                 from sonality.agent import SonalityAgent
@@ -427,7 +424,6 @@ class TestSnapshotGrowthLive:
             with (
                 mock.patch.object(config, "SPONGE_FILE", Path(td) / "sponge.json"),
                 mock.patch.object(config, "SPONGE_HISTORY_DIR", Path(td) / "history"),
-                mock.patch.object(config, "CHROMADB_DIR", Path(td) / "chromadb"),
                 mock.patch.object(config, "ESS_AUDIT_LOG_FILE", Path(td) / "ess_log.jsonl"),
             ):
                 from sonality.agent import SonalityAgent

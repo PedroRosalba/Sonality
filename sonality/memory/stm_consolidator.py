@@ -12,13 +12,10 @@ import threading
 
 from .. import config
 from ..llm.prompts import SUMMARIZATION_PROMPT
+from ..provider import chat_completion
 from .stm import ShortTermMemory, STMMessage
 
 log = logging.getLogger(__name__)
-
-
-class SummarizationResponse:
-    """Not a Pydantic model - summarization returns plain text."""
 
 
 class BackgroundSummarizer(threading.Thread):
@@ -52,11 +49,12 @@ class BackgroundSummarizer(threading.Thread):
                             )
                         else:
                             self._stm.running_summary = new_summary
-                        log.info("Updated running summary (%d chars)", len(self._stm.running_summary))
+                        log.info(
+                            "Updated running summary (%d chars)", len(self._stm.running_summary)
+                        )
                 elif evictions:
                     # Put them back if not enough for a batch yet
-                    for msg in evictions:
-                        self._stm._eviction_queue.append(msg)
+                    self._stm.requeue_evictions(evictions)
 
             except Exception:
                 log.exception("Summarizer error; continuing")
@@ -73,16 +71,13 @@ class BackgroundSummarizer(threading.Thread):
             previous_summary=self._stm.running_summary or "None",
         )
 
-        from ..llm.caller import _get_client, _raw_call
-
         try:
-            client = _get_client()
-            return _raw_call(
-                client,
-                prompt=prompt,
+            completion = chat_completion(
                 model=config.FAST_LLM_MODEL,
                 max_tokens=config.FAST_LLM_MAX_TOKENS,
-            ).strip()
+                messages=({"role": "user", "content": prompt},),
+            )
+            return completion.text.strip()
         except Exception:
             log.exception("Summarization LLM call failed")
             # Divide and conquer on failure (could be context overflow)
@@ -101,16 +96,13 @@ class BackgroundSummarizer(threading.Thread):
             messages=f"Existing summary:\n{existing}\n\nNew information:\n{new}",
             previous_summary="",
         )
-        from ..llm.caller import _get_client, _raw_call
-
         try:
-            client = _get_client()
-            return _raw_call(
-                client,
-                prompt=prompt,
+            completion = chat_completion(
                 model=config.FAST_LLM_MODEL,
                 max_tokens=config.FAST_LLM_MAX_TOKENS,
-            ).strip()
+                messages=({"role": "user", "content": prompt},),
+            )
+            return completion.text.strip()
         except Exception:
             log.exception("Summary merge failed; concatenating")
             return f"{existing}\n\n{new}"

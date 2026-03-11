@@ -1,23 +1,18 @@
-"""Universal LLM call wrapper with retry, repair, and fallback.
-
-All LLM-based assessment prompts in the memory architecture MUST use ``llm_call``
-rather than calling the Anthropic SDK or OpenRouter directly. This ensures
-consistent JSON parsing, schema validation, repair logic, and graceful
-degradation across all 12+ prompt types.
-"""
+"""Universal structured LLM call wrapper with retry and JSON repair."""
 
 from __future__ import annotations
 
 import json
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from anthropic import Anthropic, APIError, APITimeoutError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 from .. import config
+from ..provider import chat_completion
 
 log = logging.getLogger(__name__)
 
@@ -33,45 +28,35 @@ _JSON_REPAIR_PROMPT: Final = (
 
 
 @dataclass(frozen=True, slots=True)
-class LLMCallResult(BaseModel.__class__.__bases__[0] if False else object):  # type: ignore[misc]
+class LLMCallResult[T: BaseModel]:
     """Result of a structured LLM call."""
 
-    value: BaseModel | None = None
-    success: bool = False
+    value: T
+    success: bool
     error: str = ""
     attempts: int = 0
     repaired: bool = False
     raw_text: str = ""
 
 
-def _get_client() -> Anthropic:
-    return Anthropic(**config.anthropic_client_kwargs())
-
-
 def _raw_call(
-    client: Anthropic,
     *,
     prompt: str,
     model: str,
     max_tokens: int,
     system: str = "",
 ) -> str:
-    """Execute a single Anthropic chat completion and return the text."""
-    messages = [{"role": "user", "content": prompt}]
-    kwargs: dict[str, object] = {
-        "model": model,
-        "messages": messages,
-        "max_tokens": max_tokens,
-    }
+    """Execute a single provider chat completion and return plain text."""
+    messages: list[dict[str, str]] = []
     if system:
-        kwargs["system"] = system
-    response = client.messages.create(**kwargs)  # type: ignore[arg-type]
-    blocks = response.content
-    parts: list[str] = []
-    for block in blocks:
-        if hasattr(block, "text"):
-            parts.append(block.text)
-    return "".join(parts)
+        messages.append({"role": "system", "content": system})
+    messages.append({"role": "user", "content": prompt})
+    completion = chat_completion(
+        model=model,
+        messages=tuple(messages),
+        max_tokens=max_tokens,
+    )
+    return completion.text
 
 
 def _parse_json(text: str) -> dict[str, object]:
@@ -83,8 +68,8 @@ def _parse_json(text: str) -> dict[str, object]:
     ):
         try:
             parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
+            if isinstance(parsed, Mapping):
+                return dict(parsed)
         except json.JSONDecodeError:
             continue
     # Try extracting first { ... } block
@@ -93,8 +78,8 @@ def _parse_json(text: str) -> dict[str, object]:
     if start != -1 and end > start:
         try:
             parsed = json.loads(stripped[start : end + 1])
-            if isinstance(parsed, dict):
-                return parsed
+            if isinstance(parsed, Mapping):
+                return dict(parsed)
         except json.JSONDecodeError:
             pass
     raise json.JSONDecodeError("No valid JSON object found in LLM response", text, 0)
@@ -104,12 +89,12 @@ def llm_call[T: BaseModel](
     *,
     prompt: str,
     response_model: type[T],
-    model: str | None = None,
-    max_tokens: int | None = None,
+    fallback: T,
+    model: str = config.FAST_LLM_MODEL,
+    max_tokens: int = config.FAST_LLM_MAX_TOKENS,
     system: str = "",
-    fallback: T | None = None,
     max_retries: int = _MAX_RETRIES,
-) -> LLMCallResult:
+) -> LLMCallResult[T]:
     """Execute a structured LLM call with retry, repair, and fallback.
 
     Parameters
@@ -134,17 +119,15 @@ def llm_call[T: BaseModel](
     LLMCallResult with ``.value`` set to the validated Pydantic model on success,
     or ``.value = fallback`` on failure.
     """
-    resolved_model = model or config.FAST_LLM_MODEL
-    resolved_max_tokens = max_tokens or config.FAST_LLM_MAX_TOKENS
+    resolved_model = model
+    resolved_max_tokens = max_tokens
 
-    client = _get_client()
     last_error = ""
     raw_text = ""
 
     for attempt in range(1, max_retries + 1):
         try:
             raw_text = _raw_call(
-                client,
                 prompt=prompt,
                 model=resolved_model,
                 max_tokens=resolved_max_tokens,
@@ -174,7 +157,6 @@ def llm_call[T: BaseModel](
                     error=str(exc),
                 )
                 repaired_text = _raw_call(
-                    client,
                     prompt=repair_prompt,
                     model=resolved_model,
                     max_tokens=resolved_max_tokens,
@@ -191,19 +173,20 @@ def llm_call[T: BaseModel](
             except Exception as repair_exc:
                 log.warning("Repair attempt failed: %s", repair_exc)
 
-        except RateLimitError:
-            wait = _BACKOFF_BASE**attempt
-            log.warning("Rate limited on attempt %d/%d; backing off %.1fs", attempt, max_retries, wait)
-            time.sleep(wait)
-            last_error = "Rate limited"
-
-        except APITimeoutError:
-            last_error = "API timeout"
-            log.warning("LLM timeout on attempt %d/%d", attempt, max_retries)
-
-        except APIError as exc:
-            last_error = f"API error: {exc}"
-            log.warning("LLM API error on attempt %d/%d: %s", attempt, max_retries, exc)
+        except RuntimeError as exc:
+            last_error = f"Provider error: {exc}"
+            if attempt < max_retries:
+                wait = _BACKOFF_BASE**attempt
+                log.warning(
+                    "LLM provider error on attempt %d/%d: %s; retrying in %.1fs",
+                    attempt,
+                    max_retries,
+                    exc,
+                    wait,
+                )
+                time.sleep(wait)
+                continue
+            log.warning("LLM provider error on attempt %d/%d: %s", attempt, max_retries, exc)
 
         except Exception as exc:
             last_error = f"Unexpected: {exc}"

@@ -27,7 +27,7 @@ def rerank_episodes(
     query: str,
     candidates: list[EpisodeNode],
     *,
-    top_k: int | None = None,
+    top_k: int = 0,
 ) -> list[EpisodeNode]:
     """Rerank candidate episodes using LLM Listwise approach.
 
@@ -38,7 +38,7 @@ def rerank_episodes(
     candidates:
         Episodes to rank (max ~25 for context efficiency).
     top_k:
-        Number of top results to return. Defaults to len(candidates).
+        Number of top results to return. 0 means return all.
 
     Returns
     -------
@@ -67,10 +67,11 @@ def rerank_episodes(
         fallback=RerankResponse(ranking=list(range(1, len(to_rank) + 1))),
     )
 
-    if result.success and result.value:
-        assert isinstance(result.value, RerankResponse)
+    if result.success:
         ranking = result.value.ranking
-        log.debug("Reranked %d candidates. Reasoning: %s", len(to_rank), result.value.reasoning[:80])
+        log.debug(
+            "Reranked %d candidates. Reasoning: %s", len(to_rank), result.value.reasoning[:80]
+        )
 
         # Map 1-indexed ranking to 0-indexed episodes
         reranked: list[EpisodeNode] = []
@@ -86,8 +87,8 @@ def rerank_episodes(
             if i not in seen:
                 reranked.append(ep)
 
-        final = reranked[: top_k] if top_k else reranked
+        final = reranked[:top_k] if top_k > 0 else reranked
         return final
 
     # Fallback: return in original order
-    return to_rank[: top_k] if top_k else to_rank
+    return to_rank[:top_k] if top_k > 0 else to_rank

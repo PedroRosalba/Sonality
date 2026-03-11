@@ -5,9 +5,16 @@ from __future__ import annotations
 import pytest
 
 from sonality import config
-from sonality.ess import ESSResult, OpinionDirection, ReasoningType, SourceReliability
+from sonality.ess import (
+    ESSResult,
+    InternalConsistencyStatus,
+    OpinionDirection,
+    ReasoningType,
+    SourceReliability,
+)
 from sonality.memory.sponge import SpongeState
-from sonality.memory.updater import SNAPSHOT_CHAR_LIMIT, compute_magnitude, validate_snapshot
+from sonality.memory.updater import validate_snapshot
+from sonality.provider import chat_completion
 
 pytestmark = [
     pytest.mark.bench,
@@ -38,7 +45,7 @@ def _make_ess(topic: str, summary: str) -> ESSResult:
         score=0.65,
         reasoning_type=ReasoningType.LOGICAL_ARGUMENT,
         source_reliability=SourceReliability.INFORMED_OPINION,
-        internal_consistency=True,
+        internal_consistency=InternalConsistencyStatus.CONSISTENT,
         novelty=0.7,
         topics=(topic,),
         summary=summary,
@@ -46,9 +53,16 @@ def _make_ess(topic: str, summary: str) -> ESSResult:
     )
 
 
-def _rewrite_snapshot(client, sponge, ess, user_message: str, agent_response: str) -> str | None:
+def _rewrite_snapshot(
+    client: object,
+    sponge: SpongeState,
+    ess: ESSResult,
+    user_message: str,
+    agent_response: str,
+) -> str:
     """Full snapshot rewrite benchmark helper."""
-    magnitude = compute_magnitude(ess, sponge)
+    _ = client
+    magnitude = max(0.01, ess.score * max(ess.novelty, 0.1))
     prompt = (
         "You are updating a personality snapshot for an evolving AI agent. "
         "Opinions are tracked separately — this captures personality style only.\n\n"
@@ -59,27 +73,25 @@ def _rewrite_snapshot(client, sponge, ess, user_message: str, agent_response: st
         "affected. If nothing personality-relevant happened, return it EXACTLY. "
         f"Keep under {config.SPONGE_MAX_TOKENS} tokens. Output text ONLY."
     )
-    response = client.messages.create(
+    completion = chat_completion(
         model=config.ESS_MODEL,
         max_tokens=700,
-        messages=[{"role": "user", "content": prompt}],
+        messages=({"role": "user", "content": prompt},),
     )
-    new = response.content[0].text.strip()
+    new = completion.text.strip()
     if not new or new == sponge.snapshot:
-        return None
+        return ""
     if not validate_snapshot(sponge.snapshot, new):
-        return None
-    if len(new) > SNAPSHOT_CHAR_LIMIT:
-        return None
+        return ""
+    if len(new) > config.SPONGE_MAX_TOKENS * 5:
+        return ""
     return new
 
 
 class TestTraitRetentionLive:
     def test_traits_survive_3_live_rewrites(self) -> None:
         """Test that traits survive 3 live rewrites."""
-        from anthropic import Anthropic
-
-        client = Anthropic(**config.anthropic_client_kwargs())
+        client = object()
         sponge = SpongeState(snapshot=SEEDED_SNAPSHOT, interaction_count=20)
 
         updates = [

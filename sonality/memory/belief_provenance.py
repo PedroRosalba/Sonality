@@ -9,16 +9,32 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 
 from pydantic import BaseModel
 
-from .. import config
 from ..llm.caller import llm_call
 from ..llm.prompts import BELIEF_UPDATE_PROMPT
-from .graph import MemoryGraph
+from .graph import EdgeType, MemoryGraph
 from .sponge import BeliefMeta, SpongeState
 
 log = logging.getLogger(__name__)
+
+
+def _append_unique_uid(values: list[str], uid: str) -> None:
+    """Append episode UID once while preserving insertion order."""
+    if uid not in values:
+        values.append(uid)
+
+
+class UpdateMagnitude(StrEnum):
+    MAJOR = "MAJOR"
+    MINOR = "MINOR"
+
+
+class ContractionAction(StrEnum):
+    CONTRACT = "CONTRACT"
+    NONE = "NONE"
 
 
 class BeliefUpdateResponse(BaseModel):
@@ -26,8 +42,8 @@ class BeliefUpdateResponse(BaseModel):
     evidence_strength: float = 0.5
     new_uncertainty: float = 0.5
     reasoning: str = ""
-    is_major_update: bool = False
-    suggests_contraction: bool = False
+    update_magnitude: UpdateMagnitude = UpdateMagnitude.MINOR
+    contraction_action: ContractionAction = ContractionAction.NONE
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,8 +54,8 @@ class ProvenanceUpdate:
     direction: float
     evidence_strength: float
     new_uncertainty: float
-    is_major_update: bool
-    suggests_contraction: bool
+    update_magnitude: UpdateMagnitude
+    contraction_action: ContractionAction
     reasoning: str
 
 
@@ -79,25 +95,21 @@ async def assess_belief_evidence(
         response_model=BeliefUpdateResponse,
         fallback=BeliefUpdateResponse(direction=0.0, evidence_strength=0.0),
     )
-
-    if result.success and result.value:
-        response = result.value
-        assert isinstance(response, BeliefUpdateResponse)
-    else:
-        response = BeliefUpdateResponse(direction=0.0, evidence_strength=0.0)
+    if not result.success:
+        raise ValueError("Belief evidence assessment returned invalid decision payload")
+    response = result.value
 
     # Update provenance in BeliefMeta
     if meta is None:
         meta = BeliefMeta(formed_at=sponge.interaction_count)
         sponge.belief_meta[topic] = meta
 
-    supports = response.direction > 0
-    if supports:
-        meta.supporting_episode_uids.append(episode_uid)
-        meta.supporting_episode_uids = meta.supporting_episode_uids[-config.MAX_UIDS_PER_BELIEF :]
+    edge_type = EdgeType.SUPPORTS_BELIEF
+    if response.direction > 0:
+        _append_unique_uid(meta.supporting_episode_uids, episode_uid)
     else:
-        meta.contradicting_episode_uids.append(episode_uid)
-        meta.contradicting_episode_uids = meta.contradicting_episode_uids[-config.MAX_UIDS_PER_BELIEF :]
+        edge_type = EdgeType.CONTRADICTS_BELIEF
+        _append_unique_uid(meta.contradicting_episode_uids, episode_uid)
         meta.last_challenged_at = sponge.interaction_count
 
     meta.uncertainty = response.new_uncertainty
@@ -107,7 +119,7 @@ async def assess_belief_evidence(
         await graph.link_belief(
             episode_uid,
             topic,
-            supports=supports,
+            edge_type=edge_type,
             strength=response.evidence_strength,
             reasoning=response.reasoning[:200],
         )
@@ -119,7 +131,7 @@ async def assess_belief_evidence(
         direction=response.direction,
         evidence_strength=response.evidence_strength,
         new_uncertainty=response.new_uncertainty,
-        is_major_update=response.is_major_update,
-        suggests_contraction=response.suggests_contraction,
+        update_magnitude=response.update_magnitude,
+        contraction_action=response.contraction_action,
         reasoning=response.reasoning,
     )

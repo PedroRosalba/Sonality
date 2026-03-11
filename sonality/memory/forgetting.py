@@ -1,14 +1,14 @@
-"""LLM-based forgetting engine with importance assessment and soft archival.
+"""LLM-based forgetting engine with archival and hard-forget decisions.
 
 Replaces formula-based importance scoring with LLM holistic assessment.
-Uses soft deletion: archive episode, remove from pgvector, keep graph node
-for provenance. Recovery possible by re-embedding.
+Supports both ARCHIVE (soft delete) and FORGET (hard delete) actions.
 """
 
 from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from enum import StrEnum
 
 from pydantic import BaseModel
 
@@ -20,17 +20,15 @@ from .graph import EpisodeNode, MemoryGraph
 log = logging.getLogger(__name__)
 
 
-class ImportanceResponse(BaseModel):
-    importance: float = 0.5
-    should_retain: bool = True
-    reasoning: str = ""
-    is_foundational: bool = False
-    redundant_with: list[str] | None = None
+class ForgettingAction(StrEnum):
+    KEEP = "KEEP"
+    ARCHIVE = "ARCHIVE"
+    FORGET = "FORGET"
 
 
 class ForgettingDecision(BaseModel):
     uid: str
-    action: str  # "KEEP" | "ARCHIVE" | "FORGET"
+    action: ForgettingAction = ForgettingAction.KEEP
     reason: str = ""
 
 
@@ -48,7 +46,7 @@ class ForgettingResult:
 
 
 class ForgettingEngine:
-    """LLM-based importance assessment with soft archival."""
+    """LLM-based importance assessment with archive/forget actions."""
 
     def __init__(self, graph: MemoryGraph, store: DualEpisodeStore) -> None:
         self._graph = graph
@@ -67,26 +65,32 @@ class ForgettingEngine:
         if not candidates:
             return ForgettingResult(kept=0, archived=0, total_assessed=0)
 
-        decisions = self._batch_assess(candidates, snapshot_excerpt)
+        decisions = self._normalize_decisions(
+            candidates,
+            self._batch_assess(candidates, snapshot_excerpt),
+        )
 
         archived = 0
         kept = 0
         for decision in decisions:
-            if decision.action == "ARCHIVE" or decision.action == "FORGET":
-                try:
-                    await self._graph.archive_episode(decision.uid)
-                    await self._store.archive_derivatives(decision.uid)
-                    archived += 1
-                    log.info("Archived episode %s: %s", decision.uid[:8], decision.reason)
-                except Exception:
-                    log.exception("Failed to archive episode %s", decision.uid[:8])
-                    kept += 1
-            else:
+            if decision.action not in {ForgettingAction.ARCHIVE, ForgettingAction.FORGET}:
+                kept += 1
+                continue
+            try:
+                action_label = await self._apply_action(decision.uid, decision.action)
+                archived += 1
+                log.info("%s episode %s: %s", action_label, decision.uid[:8], decision.reason)
+            except Exception:
+                log.exception(
+                    "Failed to %s episode %s", decision.action.value.lower(), decision.uid[:8]
+                )
                 kept += 1
 
         log.info(
             "Forgetting cycle: %d assessed, %d kept, %d archived",
-            len(candidates), kept, archived,
+            len(candidates),
+            kept,
+            archived,
         )
         return ForgettingResult(
             kept=kept,
@@ -101,7 +105,7 @@ class ForgettingEngine:
     ) -> list[ForgettingDecision]:
         """Use LLM to batch-assess episode importance."""
         candidates_summary = "\n\n".join(
-            f"UID: {ep.uid[:8]}\n"
+            f"UID: {ep.uid}\n"
             f"Content: {ep.content[:200]}\n"
             f"Topics: {', '.join(ep.topics)}\n"
             f"ESS: {ep.ess_score:.2f} | Access count: {ep.access_count} | "
@@ -118,16 +122,66 @@ class ForgettingEngine:
             response_model=BatchForgettingResponse,
             fallback=BatchForgettingResponse(
                 decisions=[
-                    ForgettingDecision(uid=ep.uid, action="KEEP", reason="Fallback: retain all")
+                    ForgettingDecision(
+                        uid=ep.uid,
+                        action=ForgettingAction.KEEP,
+                        reason="Fallback: retain all",
+                    )
                     for ep in candidates
                 ]
             ),
         )
-        if result.success and result.value:
-            assert isinstance(result.value, BatchForgettingResponse)
+        if result.success:
             return result.value.decisions
         # Fallback: keep everything
         return [
-            ForgettingDecision(uid=ep.uid, action="KEEP", reason="Assessment failed")
+            ForgettingDecision(
+                uid=ep.uid,
+                action=ForgettingAction.KEEP,
+                reason="Assessment failed",
+            )
             for ep in candidates
         ]
+
+    async def _apply_action(self, uid: str, action: ForgettingAction) -> str:
+        """Execute one archive/forget action and return action label."""
+        if action is ForgettingAction.ARCHIVE:
+            await self._graph.archive_episode(uid)
+            await self._store.archive_derivatives(uid)
+            return "Archived"
+        await self._graph.delete_episode(uid)
+        await self._store.delete_derivatives(uid)
+        return "Forgot"
+
+    def _normalize_decisions(
+        self,
+        candidates: list[EpisodeNode],
+        decisions: list[ForgettingDecision],
+    ) -> list[ForgettingDecision]:
+        """Validate decisions against candidate set and fill missing rows."""
+        candidate_uids = {candidate.uid for candidate in candidates}
+        normalized: list[ForgettingDecision] = []
+        seen_uids: set[str] = set()
+        for decision in decisions:
+            uid = decision.uid.strip()
+            if uid not in candidate_uids:
+                log.warning("Ignoring forgetting decision for unknown UID: %s", uid)
+                continue
+            normalized.append(
+                ForgettingDecision(
+                    uid=uid,
+                    action=decision.action,
+                    reason=decision.reason.strip(),
+                )
+            )
+            seen_uids.add(uid)
+        for candidate in candidates:
+            if candidate.uid not in seen_uids:
+                normalized.append(
+                    ForgettingDecision(
+                        uid=candidate.uid,
+                        action=ForgettingAction.KEEP,
+                        reason="Missing decision; default keep",
+                    )
+                )
+        return normalized

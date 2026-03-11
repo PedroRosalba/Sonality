@@ -11,22 +11,30 @@ from __future__ import annotations
 
 import logging
 import uuid
+from enum import StrEnum
 
 from pydantic import BaseModel
 
 from .. import config
-from ..llm.caller import _get_client, _raw_call, llm_call
+from ..llm.caller import llm_call
 from ..llm.prompts import CONSOLIDATION_READINESS_PROMPT
+from ..provider import chat_completion
+from .context_format import format_episode_block, format_episode_line
 from .graph import EpisodeNode, MemoryGraph
 
 log = logging.getLogger(__name__)
 
 
+class ConsolidationReadinessDecision(StrEnum):
+    READY = "READY"
+    NOT_READY = "NOT_READY"
+
+
 class ConsolidationReadinessResponse(BaseModel):
-    ready_to_consolidate: bool
+    readiness_decision: ConsolidationReadinessDecision = ConsolidationReadinessDecision.NOT_READY
     confidence: float = 0.0
     reasoning: str = ""
-    suggested_summary_focus: str | None = None
+    suggested_summary_focus: str = ""
 
 
 class ConsolidationEngine:
@@ -35,28 +43,30 @@ class ConsolidationEngine:
     def __init__(self, graph: MemoryGraph) -> None:
         self._graph = graph
 
-    async def maybe_consolidate_segment(self, segment_id: str) -> str | None:
+    async def maybe_consolidate_segment(self, segment_id: str) -> str:
         """Check if a segment is ready for consolidation and summarize if so.
 
-        Returns the summary UID if consolidated, None otherwise.
+        Returns the summary UID if consolidated, empty string otherwise.
         """
         episodes = await self._graph.get_segment_episodes(segment_id)
         if len(episodes) < 2:
-            return None
+            return ""
 
         # LLM readiness check
         readiness = self._check_readiness(segment_id, episodes)
-        if not readiness.ready_to_consolidate:
+        if readiness.readiness_decision is not ConsolidationReadinessDecision.READY:
             log.debug(
                 "Segment %s not ready: %s (conf=%.2f)",
-                segment_id, readiness.reasoning, readiness.confidence,
+                segment_id,
+                readiness.reasoning,
+                readiness.confidence,
             )
-            return None
+            return ""
 
         # Generate summary
         summary_text = self._generate_summary(episodes, readiness.suggested_summary_focus)
         if not summary_text:
-            return None
+            return ""
 
         # Create summary node in graph
         summary_uid = str(uuid.uuid4())
@@ -70,10 +80,14 @@ class ConsolidationEngine:
             source_uids=source_uids,
             topics=topics,
         )
+        await self._graph.mark_segment_consolidated(segment_id)
 
         log.info(
             "Consolidated segment %s into summary %s (%d episodes -> %d chars)",
-            segment_id, summary_uid[:8], len(episodes), len(summary_text),
+            segment_id,
+            summary_uid[:8],
+            len(episodes),
+            len(summary_text),
         )
         return summary_uid
 
@@ -82,7 +96,7 @@ class ConsolidationEngine:
     ) -> ConsolidationReadinessResponse:
         """Use LLM to assess if segment is ready for consolidation."""
         episode_summaries = "\n".join(
-            f"- [{ep.created_at[:10] if ep.created_at else '?'}] {ep.summary or ep.content[:150]}"
+            f"- {format_episode_line(created_at=ep.created_at, summary=ep.summary, content=ep.content, content_limit=150)}"
             for ep in episodes
         )
         start_time = episodes[0].created_at if episodes else "unknown"
@@ -98,19 +112,22 @@ class ConsolidationEngine:
         result = llm_call(
             prompt=prompt,
             response_model=ConsolidationReadinessResponse,
-            fallback=ConsolidationReadinessResponse(ready_to_consolidate=False),
+            fallback=ConsolidationReadinessResponse(),
         )
-        if result.success and result.value:
-            assert isinstance(result.value, ConsolidationReadinessResponse)
-            return result.value
-        return ConsolidationReadinessResponse(ready_to_consolidate=False)
+        if not result.success:
+            raise ValueError(
+                f"Consolidation readiness returned invalid payload for segment={segment_id}"
+            )
+        return result.value
 
-    def _generate_summary(
-        self, episodes: list[EpisodeNode], focus: str | None
-    ) -> str:
+    def _generate_summary(self, episodes: list[EpisodeNode], focus: str) -> str:
         """Generate a consolidation summary using LLM."""
         content = "\n\n".join(
-            f"[{ep.created_at[:10] if ep.created_at else '?'}]\n{ep.content[:500]}"
+            format_episode_block(
+                created_at=ep.created_at,
+                content=ep.content,
+                content_limit=500,
+            )
             for ep in episodes
         )
         focus_instruction = f"\n\nFocus on: {focus}" if focus else ""
@@ -122,13 +139,12 @@ class ConsolidationEngine:
             f"Write the summary:"
         )
         try:
-            client = _get_client()
-            return _raw_call(
-                client,
-                prompt=prompt,
+            completion = chat_completion(
                 model=config.FAST_LLM_MODEL,
                 max_tokens=config.FAST_LLM_MAX_TOKENS,
-            ).strip()
+                messages=({"role": "user", "content": prompt},),
+            )
+            return completion.text.strip()
         except Exception:
             log.exception("Consolidation summary generation failed")
             return ""

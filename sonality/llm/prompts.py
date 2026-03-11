@@ -53,11 +53,35 @@ Consider:
 
 Return JSON:
 {{
-  "is_boundary": true | false,
+  "boundary_decision": "BOUNDARY" | "CONTINUE",
   "confidence": 0.0-1.0,
   "boundary_type": "topic_shift" | "goal_change" | "explicit_transition" | "none",
   "reasoning": "Brief explanation of your assessment",
-  "suggested_segment_label": "2-4 word label if boundary, else null"
+  "suggested_segment_label": "2-4 word label if boundary, else empty string"
+}}"""
+
+# --- Reflection Gate Decision ---
+REFLECTION_GATE_PROMPT: Final = """\
+Decide whether the agent should run reflection this turn.
+
+Current interaction: {interaction_count}
+Interactions since last reflection: {window_interactions}
+Target cadence (guideline only): every ~{target_cadence} interactions
+Pending insights: {pending_insights}
+Pending staged belief updates: {staged_updates}
+Recent shift magnitude since last reflection: {recent_shift_magnitude}
+Current disagreement rate: {disagreement_rate}
+Tracked belief count: {belief_count}
+
+Choose:
+- SKIP: no meaningful new synthesis needed
+- PERIODIC: enough elapsed context to do a maintenance reflection
+- EVENT_DRIVEN: meaningful recent change warrants reflection now
+
+Return JSON:
+{{
+  "trigger": "SKIP" | "PERIODIC" | "EVENT_DRIVEN",
+  "reasoning": "Why this trigger is appropriate"
 }}"""
 
 # --- Query Routing ---
@@ -84,8 +108,8 @@ Return JSON:
 {{
   "category": "NONE" | "SIMPLE" | "TEMPORAL" | "MULTI_ENTITY" | "AGGREGATION" | "BELIEF_QUERY",
   "depth": "MINIMAL" | "MODERATE" | "DEEP",
-  "needs_temporal_expansion": true | false,
-  "search_semantic_memory": true | false,
+  "temporal_expansion": "EXPAND" | "NO_EXPAND",
+  "semantic_memory": "SEARCH" | "SKIP",
   "reasoning": "Brief explanation"
 }}"""
 
@@ -105,7 +129,7 @@ Evaluate:
 
 Return JSON:
 {{
-  "is_sufficient": true | false,
+  "sufficiency_decision": "SUFFICIENT" | "INSUFFICIENT",
   "confidence": 0.0-1.0,
   "reasoning": "Why sufficient/insufficient",
   "suggested_refinement": "Alternative query if insufficient, else null"
@@ -169,7 +193,7 @@ Consider:
 
 Return JSON:
 {{
-  "ready_to_consolidate": true | false,
+  "readiness_decision": "READY" | "NOT_READY",
   "confidence": 0.0-1.0,
   "reasoning": "Why ready/not ready",
   "suggested_summary_focus": "What the summary should emphasize" | null
@@ -191,40 +215,6 @@ Previous context summary (if any):
 
 Provide a concise summary that captures the essential information."""
 
-# --- Importance Assessment (ForgettingEngine) ---
-IMPORTANCE_ASSESSMENT_PROMPT: Final = """\
-Assess the long-term importance of this memory.
-
-Memory Content:
-{content}
-
-Memory Metadata:
-- Created: {days_ago} days ago
-- Last accessed: {last_accessed_days} days ago
-- Access count: {access_count}
-- Topics: {topics}
-- ESS quality score: {ess_score}
-- Consolidation level: {consolidation_level}
-
-Related Beliefs:
-{related_beliefs}
-
-Consider:
-- Does this contain unique, unrepeated information?
-- Is this foundational to any current beliefs?
-- Would forgetting this create inconsistency in the agent's worldview?
-- Is this redundant with other memories?
-- How central is this to the agent's identity/personality?
-
-Return JSON:
-{{
-  "importance": 0.0-1.0,
-  "should_retain": true | false,
-  "reasoning": "Why important/unimportant",
-  "is_foundational": true | false,
-  "redundant_with": ["uid1", "uid2"] | null
-}}"""
-
 # --- Batch Forgetting ---
 BATCH_FORGETTING_PROMPT: Final = """\
 Review these memory candidates for potential archival.
@@ -243,7 +233,11 @@ For each candidate, decide:
 Return JSON:
 {{
   "decisions": [
-    {{"uid": "...", "action": "KEEP" | "ARCHIVE" | "FORGET", "reason": "..."}}
+    {{
+      "uid": "...",
+      "action": "KEEP" | "ARCHIVE" | "FORGET",
+      "reason": "..."
+    }}
   ]
 }}"""
 
@@ -279,8 +273,75 @@ Return JSON:
   "evidence_strength": 0.0-1.0,
   "new_uncertainty": 0.0-1.0,
   "reasoning": "Why this assessment",
-  "is_major_update": true | false,
-  "suggests_contraction": true | false
+  "update_magnitude": "MAJOR" | "MINOR",
+  "contraction_action": "CONTRACT" | "NONE"
+}}"""
+
+# --- Structural Disagreement Detection ---
+DISAGREEMENT_DETECTION_PROMPT: Final = """\
+Determine if the user's message structurally disagrees with the agent's position.
+
+User Message: {user_message}
+Agent Position on Topic "{topic}": {position_value} (-1 to +1 scale)
+User Opinion Direction: {opinion_direction}
+
+Consider:
+- Is the user presenting an argument against the agent's position?
+- Is this genuine disagreement or simply different emphasis?
+- Does the user provide evidence or reasoning for their opposing view?
+
+Return JSON:
+{{
+  "disagreement_verdict": "DISAGREEMENT" | "NO_DISAGREEMENT",
+  "disagreement_strength": 0.0-1.0,
+  "reasoning": "Why this is/isn't disagreement"
+}}"""
+
+# --- Belief Decay Decision ---
+BELIEF_DECAY_PROMPT: Final = """\
+Assess whether this belief should be retained or decayed based on staleness.
+
+Belief Topic: {topic}
+Current Position: {position}
+Current Confidence: {confidence}
+Evidence Count: {evidence_count}
+Interactions Since Last Reinforced: {gap}
+Total Interactions: {total_interactions}
+
+Consider:
+- How central is this belief to the agent's identity?
+- Has enough time passed that this belief might be outdated?
+- Is this a foundational belief that should persist regardless of reinforcement?
+- Would forgetting this create inconsistency?
+
+Return JSON:
+{{
+  "action": "RETAIN" | "DECAY" | "FORGET",
+  "new_confidence": 0.0-1.0,
+  "reasoning": "Why this action"
+}}"""
+
+# --- Entrenchment Detection ---
+ENTRENCHMENT_DETECTION_PROMPT: Final = """\
+Assess if this belief shows signs of entrenchment (echo chamber effect).
+
+Belief Topic: {topic}
+Current Position: {position} (-1 to +1)
+Recent Updates: {recent_updates}
+Supporting Episodes: {supporting_count}
+Contradicting Episodes: {contradicting_count}
+
+Signs of entrenchment:
+- Updates consistently agree with current position
+- Few or no contradicting episodes considered
+- High confidence despite limited evidence diversity
+
+Return JSON:
+{{
+  "entrenchment_status": "ENTRENCHED" | "NOT_ENTRENCHED",
+  "confidence": 0.0-1.0,
+  "reasoning": "Why entrenched/not entrenched",
+  "recommendation": "Suggested action if entrenched"
 }}"""
 
 # --- Health Assessment ---
@@ -344,5 +405,33 @@ Return JSON commands:
      "value": "advanced", "confidence": 0.9}},
     {{"command": "delete", "tag": "Preferences", "feature": "old_preference",
      "reason": "contradicted by new evidence"}}
+  ]
+}}"""
+
+# --- Semantic Feature Consolidation ---
+FEATURE_CONSOLIDATION_PROMPT: Final = """\
+Review semantic features in one category and decide whether consolidation is needed.
+
+Category: {category}
+Current features:
+{features}
+
+Consolidation means merging redundant/overlapping features into one canonical feature.
+Only propose merges when meaning is truly overlapping or duplicate.
+Do not merge distinct facts.
+
+Return JSON:
+{{
+  "consolidation_decision": "CONSOLIDATE" | "SKIP",
+  "reasoning": "Why consolidation is or isn't needed now",
+  "actions": [
+    {{
+      "source_uid": "redundant feature uid",
+      "target_uid": "canonical feature uid",
+      "canonical_tag": "optional canonical tag, else empty string",
+      "canonical_feature": "optional canonical feature name, else empty string",
+      "canonical_value": "optional canonical value, else empty string",
+      "reason": "why these should merge"
+    }}
   ]
 }}"""
