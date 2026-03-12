@@ -261,7 +261,7 @@ class SonalityAgent:
     def _run_async[T](self, coro: Coroutine[object, object, T]) -> T:
         """Run an async coroutine from sync context via the background event loop."""
         future: Future[T] = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=30)
+        return future.result(timeout=120)
 
     async def _init_new_architecture(self) -> RuntimeComponents:
         """Initialize Neo4j + pgvector + embedding components."""
@@ -281,7 +281,7 @@ class SonalityAgent:
         split_agent = SplitQueryAgent(dual_store, graph)
         consolidation = ConsolidationEngine(graph)
         forgetting = ForgettingEngine(graph, dual_store)
-        semantic_worker = SemanticIngestionWorker(db.pg_pool, embedder, run_async=self._run_async)
+        semantic_worker = SemanticIngestionWorker(db.pg_pool, embedder)
         semantic_worker.start()
         # Restore last episode UID for temporal linking
         last_uid = await graph.get_last_episode_uid()
@@ -368,7 +368,7 @@ class SonalityAgent:
 
         completion = chat_completion(
             model=self.model,
-            max_tokens=2048,
+            max_tokens=config.FAST_LLM_MAX_TOKENS,
             messages=(
                 {"role": "system", "content": system_prompt},
                 *self.conversation,
@@ -496,6 +496,13 @@ class SonalityAgent:
             )
             for ep in selected
         ]
+        log.info(
+            "Retrieval: category=%s n_episodes=%d n_semantic=%d | episodes=%s",
+            decision.category,
+            len(selected),
+            len(semantic_context),
+            [(ep.uid[:8], (ep.summary or ep.content)[:50]) for ep in selected],
+        )
         return [*episode_context, *semantic_context]
 
     async def _update_utility_with_signal(self, episode_uid: str, signal: UtilitySignal) -> None:
@@ -507,7 +514,7 @@ class SonalityAgent:
         """Search semantic features via pgvector similarity."""
         query_embedding = self._embedder.embed_query(query)
         async with self._db.pg_pool.connection() as conn, conn.cursor() as cur:
-            await cur.execute("SET hnsw.iterative_scan = 'on'")
+            await cur.execute("SET hnsw.iterative_scan = 'relaxed_order'")
             await cur.execute("SET hnsw.ef_search = 100")
             await cur.execute(
                 """
@@ -552,6 +559,16 @@ class SonalityAgent:
         ess = self._classify_ess(user_message)
         self.last_ess = ess
         self._log_ess(ess, user_message)
+        log.info(
+            "ESS: score=%.3f type=%s dir=%s novelty=%.2f topics=%s severity=%s attempts=%d",
+            ess.score,
+            ess.reasoning_type,
+            ess.opinion_direction,
+            ess.novelty,
+            list(ess.topics),
+            ess.default_severity,
+            ess.attempt_count,
+        )
 
         # Event boundary detection + dual-store storage (required architecture)
         previous_segment_id = self._boundary_detector.current_segment_id
@@ -595,21 +612,33 @@ class SonalityAgent:
             log.debug("STM persistence failed", exc_info=True)
 
         self.sponge.interaction_count += 1
-        committed = self.sponge.apply_due_staged_updates()
-        if committed:
-            log.info("Committed staged beliefs: %s", committed)
-            self._log_event(
-                {
-                    "event": "opinion_commit",
-                    "interaction": self.sponge.interaction_count,
-                    "committed": committed,
-                    "remaining_staged": len(self.sponge.staged_opinion_updates),
-                }
+
+        # Manipulative interactions (social pressure, emotional appeals) should not
+        # mutate the personality state — defer staged commits and skip insight extraction.
+        manipulative = ess.reasoning_type in {"social_pressure", "emotional_appeal"}
+        if manipulative:
+            log.info(
+                "Manipulative interaction (%s, score=%.3f): freezing sponge mutation",
+                ess.reasoning_type,
+                ess.score,
             )
+
+        if not manipulative:
+            committed = self.sponge.apply_due_staged_updates()
+            if committed:
+                log.info("Committed staged beliefs: %s", committed)
+                self._log_event(
+                    {
+                        "event": "opinion_commit",
+                        "interaction": self.sponge.interaction_count,
+                        "committed": committed,
+                        "remaining_staged": len(self.sponge.staged_opinion_updates),
+                    }
+                )
 
         for topic in ess.topics:
             self.sponge.track_topic(topic)
-        if episode_uid:
+        if episode_uid and not manipulative:
             try:
                 self._run_async(
                     self._update_opinions_with_provenance(
@@ -624,7 +653,8 @@ class SonalityAgent:
             self.sponge.note_agreement()
 
         self.previous_snapshot = self.sponge.snapshot
-        self._extract_insight(user_message, agent_response, ess)
+        if not manipulative:
+            self._extract_insight(user_message, agent_response, ess)
         self._maybe_reflect()
         self._log_health_event()
 
@@ -775,10 +805,16 @@ class SonalityAgent:
         """Return whether ESS permits topic-based opinion updates."""
         if not ess.topics:
             return False
+        if ess.score < 0.10:
+            log.info("Skipping %s: ESS score %.3f below minimum threshold", update_kind, ess.score)
+            return False
         return self._ess_allows_update_quality(ess, update_kind=update_kind)
 
     def _ess_allows_insight_update(self, ess: ESSResult, *, update_kind: str) -> bool:
         """Return whether ESS permits insight extraction updates."""
+        if ess.score < 0.10:
+            log.info("Skipping %s: ESS score %.3f below minimum threshold", update_kind, ess.score)
+            return False
         return self._ess_allows_update_quality(ess, update_kind=update_kind)
 
     def _topic_revision_confidence(self, topic: str, direction: float) -> float:
@@ -946,6 +982,10 @@ class SonalityAgent:
             f"Staged beliefs: {staged_line}"
         )
 
+    # Minimum interactions required before event-driven reflection is allowed.
+    # Prevents aggressive early reflection on fresh agents with few interactions.
+    _MIN_WINDOW_FOR_EVENT_DRIVEN: int = 5
+
     def _reflection_gate(self) -> ReflectionGate:
         """Determine whether reflection should run for this interaction."""
         window_interactions = self.sponge.interaction_count - self.sponge.last_reflection_at
@@ -954,6 +994,15 @@ class SonalityAgent:
             for shift in self.sponge.recent_shifts
             if shift.interaction > self.sponge.last_reflection_at
         )
+
+        # Hard minimum window: never reflect before 5 interactions have accumulated.
+        if window_interactions < self._MIN_WINDOW_FOR_EVENT_DRIVEN:
+            return ReflectionGate(
+                trigger=ReflectionTrigger.SKIP,
+                trigger_label=f"skip (window={window_interactions} < min={self._MIN_WINDOW_FOR_EVENT_DRIVEN})",
+                window_interactions=window_interactions,
+            )
+
         prompt = REFLECTION_GATE_PROMPT.format(
             interaction_count=self.sponge.interaction_count,
             window_interactions=window_interactions,
@@ -1270,7 +1319,7 @@ class SonalityAgent:
             pre_snapshot = self.sponge.snapshot
             completion = chat_completion(
                 model=self.ess_model,
-                max_tokens=700,
+                max_tokens=config.FAST_LLM_MAX_TOKENS,
                 messages=({"role": "user", "content": prompt},),
             )
             reflected_snapshot = completion.text.strip()
@@ -1349,12 +1398,17 @@ class SonalityAgent:
         parts = [
             f"[#{self.sponge.interaction_count}]",
             f"ESS={ess.score:.2f}({ess.reasoning_type})",
+            f"dir={ess.opinion_direction}",
+            f"src={ess.source_reliability}",
+            f"novelty={ess.novelty:.2f}",
             f"staged={len(self.sponge.staged_opinion_updates)}",
             f"pending={len(self.sponge.pending_insights)}",
         ]
         if ess.topics:
-            parts.append(f"topics={ess.topics}")
+            parts.append(f"topics={list(ess.topics)}")
         parts.append(f"v{self.sponge.version}")
+        if ess.default_severity != "none":
+            parts.append(f"ESS_FALLBACK={ess.default_severity}({list(ess.defaulted_fields)})")
 
         for topic in ess.topics:
             meta = self.sponge.belief_meta.get(topic)

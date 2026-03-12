@@ -74,7 +74,7 @@ def extract_insight(
         response_model=InsightExtractionResponse,
         fallback=InsightExtractionResponse(),
         model=model,
-        max_tokens=120,
+        max_tokens=config.FAST_LLM_MAX_TOKENS,
     )
     if not result.success:
         raise ValueError("Insight extraction returned invalid decision payload")

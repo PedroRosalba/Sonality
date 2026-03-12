@@ -58,9 +58,11 @@ POSTGRES_URL: Final = _env_str(
 PG_POOL_MIN_SIZE: Final = _env_int("SONALITY_PG_POOL_MIN_SIZE", 2)
 PG_POOL_MAX_SIZE: Final = _env_int("SONALITY_PG_POOL_MAX_SIZE", 10)
 
-# --- Embedding (same provider endpoint as chat models) ---
-EMBEDDING_MODEL: Final = _env_str("SONALITY_EMBEDDING_MODEL", "Qwen/Qwen3-Embedding-8B")
-EMBEDDING_DIMENSIONS: Final = _env_int("SONALITY_EMBEDDING_DIMENSIONS", 4096)
+# --- Embedding (can use separate endpoint and API key from chat models) ---
+EMBEDDING_BASE_URL: Final = _env_str("SONALITY_EMBEDDING_BASE_URL", "")
+EMBEDDING_API_KEY: Final = _env_str("SONALITY_EMBEDDING_API_KEY", "")
+EMBEDDING_MODEL: Final = _env_str("SONALITY_EMBEDDING_MODEL", "nomic-embed-text")
+EMBEDDING_DIMENSIONS: Final = _env_int("SONALITY_EMBEDDING_DIMENSIONS", 768)
 EMBEDDING_BATCH_SIZE: Final = _env_int("SONALITY_EMBEDDING_BATCH_SIZE", 32)
 EMBEDDING_QUERY_INSTRUCTION: Final = _env_str(
     "SONALITY_EMBEDDING_QUERY_INSTRUCTION",

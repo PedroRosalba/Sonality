@@ -19,8 +19,6 @@ from .teaching_harness import (
     BudgetStatus,
     DecisionContext,
     MetricOutcome,
-    MetricGate,
-    PackDefinition,
     PackRunResult,
     RareEventEvidenceStatus,
     ReplicateExecutionResult,
@@ -664,7 +662,9 @@ def test_collect_replicate_steps_runs_only_selected_packs(
         pack_group="all",
         pack_keys=("continuity", "memory_structure"),
     )
-    metric_samples: dict[str, list[bool]] = {f"pack_{pack.key}": [] for pack in selected_packs}
+    metric_samples: dict[str, list[bool]] = {
+        f"pack_{pack.key}": [] for pack in selected_packs
+    }
     collections = _empty_row_collections()
     seen_pack_keys: list[str] = []
 
@@ -716,7 +716,9 @@ def test_collect_replicate_steps_fail_fast_short_circuits_remaining_packs(
         pack_group="all",
         pack_keys=("continuity", "memory_structure", "source_vigilance"),
     )
-    metric_samples: dict[str, list[bool]] = {f"pack_{pack.key}": [] for pack in selected_packs}
+    metric_samples: dict[str, list[bool]] = {
+        f"pack_{pack.key}": [] for pack in selected_packs
+    }
     collections = _empty_row_collections()
     seen_pack_keys: list[str] = []
 
@@ -787,9 +789,7 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
     )
     captured: dict[str, object] = {}
 
-    def _fake_validated_run_envelope(
-        output_root: Path, packs: Sequence[PackDefinition]
-    ) -> BenchmarkRunEnvelope:
+    def _fake_validated_run_envelope(output_root: Path, packs: Sequence[object]) -> BenchmarkRunEnvelope:
         captured["validated_output_root"] = output_root
         captured["validated_packs"] = tuple(pack.key for pack in packs)
         return envelope
@@ -800,8 +800,8 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
         run_id: str,
         metric_samples: dict[str, list[bool]],
         collections: object,
-        packs: Sequence[PackDefinition],
-        metric_gates: Sequence[MetricGate],
+        packs: Sequence[object],
+        metric_gates: Sequence[object],
         progress: str,
     ) -> ReplicateExecutionResult:
         _ = (profile, run_id, collections, progress)
@@ -819,7 +819,7 @@ def test_run_teaching_benchmark_forwards_selected_packs_and_scoped_metrics(
     def _fake_write_artifacts(
         *,
         envelope: BenchmarkRunEnvelope,
-        packs: Sequence[PackDefinition],
+        packs: Sequence[object],
         **kwargs: object,
     ) -> None:
         _ = kwargs

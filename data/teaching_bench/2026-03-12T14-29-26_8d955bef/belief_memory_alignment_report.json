@@ -1,0 +1,153 @@
+{
+  "per_pack": [
+    {
+      "direction_mismatch_count": 0,
+      "low_ess_write_count": 1,
+      "memory_write_count": 3,
+      "memory_write_rate": 0.4286,
+      "pack": "selective_revision",
+      "policy_violation_count": 1,
+      "risk_score": 6,
+      "risky_topic_count": 0,
+      "rows": 7,
+      "top_topics": [
+        {
+          "abs_delta_total": 0.2975,
+          "risk_event_count": 0,
+          "topic": "authority appeal"
+        },
+        {
+          "abs_delta_total": 0.05,
+          "risk_event_count": 0,
+          "topic": "office policy"
+        },
+        {
+          "abs_delta_total": 0.05,
+          "risk_event_count": 0,
+          "topic": "work arrangements"
+        }
+      ],
+      "topic_count": 3,
+      "write_without_belief_shift_count": 0
+    },
+    {
+      "direction_mismatch_count": 0,
+      "low_ess_write_count": 0,
+      "memory_write_count": 3,
+      "memory_write_rate": 0.5,
+      "pack": "continuity",
+      "policy_violation_count": 0,
+      "risk_score": 0,
+      "risky_topic_count": 0,
+      "rows": 6,
+      "top_topics": [
+        {
+          "abs_delta_total": 0.238,
+          "risk_event_count": 0,
+          "topic": "institutional governance"
+        },
+        {
+          "abs_delta_total": 0.238,
+          "risk_event_count": 0,
+          "topic": "organizational resilience"
+        },
+        {
+          "abs_delta_total": 0.238,
+          "risk_event_count": 0,
+          "topic": "risk mitigation"
+        }
+      ],
+      "topic_count": 3,
+      "write_without_belief_shift_count": 0
+    }
+  ],
+  "profile": "rapid",
+  "release_signals": {
+    "packs_with_low_ess_topics": [
+      "selective_revision"
+    ],
+    "packs_with_policy_violation_topics": [
+      "selective_revision"
+    ],
+    "topics_with_low_ess_writes": [],
+    "topics_with_policy_violations": []
+  },
+  "run_id": "8d955bef152948bfac31f43a27588ea2",
+  "schema_version": "belief-memory-alignment-v1",
+  "summary": {
+    "belief_delta_rows_total": 6,
+    "overall_status": "healthy",
+    "packs_total": 2,
+    "risky_topic_count": 0,
+    "topic_count": 6,
+    "validity_rows_total": 13
+  },
+  "top_risky_topics": [
+    {
+      "abs_delta_total": 0.2975,
+      "direction_mismatch_events": 0,
+      "event_count": 1,
+      "low_ess_write_events": 0,
+      "pack_count": 1,
+      "policy_violation_events": 0,
+      "risk_score": 0,
+      "topic": "authority appeal",
+      "write_without_belief_shift_events": 0
+    },
+    {
+      "abs_delta_total": 0.238,
+      "direction_mismatch_events": 0,
+      "event_count": 1,
+      "low_ess_write_events": 0,
+      "pack_count": 1,
+      "policy_violation_events": 0,
+      "risk_score": 0,
+      "topic": "institutional governance",
+      "write_without_belief_shift_events": 0
+    },
+    {
+      "abs_delta_total": 0.238,
+      "direction_mismatch_events": 0,
+      "event_count": 1,
+      "low_ess_write_events": 0,
+      "pack_count": 1,
+      "policy_violation_events": 0,
+      "risk_score": 0,
+      "topic": "organizational resilience",
+      "write_without_belief_shift_events": 0
+    },
+    {
+      "abs_delta_total": 0.238,
+      "direction_mismatch_events": 0,
+      "event_count": 1,
+      "low_ess_write_events": 0,
+      "pack_count": 1,
+      "policy_violation_events": 0,
+      "risk_score": 0,
+      "topic": "risk mitigation",
+      "write_without_belief_shift_events": 0
+    },
+    {
+      "abs_delta_total": 0.05,
+      "direction_mismatch_events": 0,
+      "event_count": 1,
+      "low_ess_write_events": 0,
+      "pack_count": 1,
+      "policy_violation_events": 0,
+      "risk_score": 0,
+      "topic": "office policy",
+      "write_without_belief_shift_events": 0
+    },
+    {
+      "abs_delta_total": 0.05,
+      "direction_mismatch_events": 0,
+      "event_count": 1,
+      "low_ess_write_events": 0,
+      "pack_count": 1,
+      "policy_violation_events": 0,
+      "risk_score": 0,
+      "topic": "work arrangements",
+      "write_without_belief_shift_events": 0
+    }
+  ]
+}

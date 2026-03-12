@@ -87,6 +87,14 @@ class DualEpisodeStore:
         if not derivatives:
             raise EpisodeStorageError("No derivatives produced from chunking")
 
+        log.debug(
+            "Episode %s: %d derivatives, dims=%d, concepts=%s",
+            episode_uid[:8],
+            len(derivatives),
+            len(derivatives[0].embedding) if derivatives else 0,
+            [d.node.key_concept[:20] for d in derivatives[:3]],
+        )
+
         # Phase 2: Neo4j graph writes (ACID transaction)
         episode_node = EpisodeNode(
             uid=episode_uid,
@@ -149,7 +157,7 @@ class DualEpisodeStore:
         """Search pgvector for similar derivatives. Returns (uid, episode_uid, distance)."""
         query_embedding = self._embedder.embed_query(query)
         async with self._pg_pool.connection() as conn, conn.cursor() as cur:
-            await cur.execute("SET hnsw.iterative_scan = 'on'")
+            await cur.execute("SET hnsw.iterative_scan = 'relaxed_order'")
             await cur.execute("SET hnsw.ef_search = 150")
             await cur.execute(
                 """

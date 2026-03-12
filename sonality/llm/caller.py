@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
 
 from pydantic import BaseModel, ValidationError
 
 from .. import config
-from ..provider import chat_completion
+from ..provider import chat_completion, extract_last_json_object
 
 log = logging.getLogger(__name__)
 
 _MAX_RETRIES: Final = 2
 _BACKOFF_BASE: Final = 1.5
+_JSON_SYSTEM_PROMPT: Final = (
+    "You are a structured data extractor. "
+    "Return ONLY a valid JSON object matching the schema in the prompt. "
+    "No prose, no explanation, no markdown fences — just the JSON object."
+)
 _JSON_REPAIR_PROMPT: Final = (
     "The following JSON is malformed or does not match the required schema.\n"
     "Fix it so it is valid JSON matching the schema below.\n\n"
@@ -61,28 +64,10 @@ def _raw_call(
 
 def _parse_json(text: str) -> dict[str, object]:
     """Extract a JSON object from LLM response text, tolerating markdown fences."""
-    stripped = text.strip()
-    for candidate in (
-        stripped,
-        stripped.replace("```json", "").replace("```", "").strip(),
-    ):
-        try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, Mapping):
-                return dict(parsed)
-        except json.JSONDecodeError:
-            continue
-    # Try extracting first { ... } block
-    start = stripped.find("{")
-    end = stripped.rfind("}")
-    if start != -1 and end > start:
-        try:
-            parsed = json.loads(stripped[start : end + 1])
-            if isinstance(parsed, Mapping):
-                return dict(parsed)
-        except json.JSONDecodeError:
-            pass
-    raise json.JSONDecodeError("No valid JSON object found in LLM response", text, 0)
+    result = extract_last_json_object(text)
+    if result is None:
+        raise ValueError(f"No valid JSON object found in LLM response: {text[:120]!r}")
+    return result
 
 
 def llm_call[T: BaseModel](
@@ -92,7 +77,7 @@ def llm_call[T: BaseModel](
     fallback: T,
     model: str = config.FAST_LLM_MODEL,
     max_tokens: int = config.FAST_LLM_MAX_TOKENS,
-    system: str = "",
+    system: str = _JSON_SYSTEM_PROMPT,
     max_retries: int = _MAX_RETRIES,
 ) -> LLMCallResult[T]:
     """Execute a structured LLM call with retry, repair, and fallback.
@@ -122,6 +107,13 @@ def llm_call[T: BaseModel](
     resolved_model = model
     resolved_max_tokens = max_tokens
 
+    schema_name = response_model.__name__
+    log.debug(
+        "llm_call schema=%s model=%s prompt=%.80r",
+        schema_name,
+        resolved_model,
+        prompt,
+    )
     last_error = ""
     raw_text = ""
 
@@ -135,6 +127,12 @@ def llm_call[T: BaseModel](
             )
             data = _parse_json(raw_text)
             value = response_model.model_validate(data)
+            log.debug(
+                "llm_call OK schema=%s attempt=%d raw=%.80r",
+                schema_name,
+                attempt,
+                raw_text,
+            )
             return LLMCallResult(
                 value=value,
                 success=True,
@@ -142,13 +140,19 @@ def llm_call[T: BaseModel](
                 raw_text=raw_text,
             )
 
-        except json.JSONDecodeError as exc:
+        except ValueError as exc:
             last_error = f"JSON parse error: {exc}"
-            log.warning("LLM call attempt %d/%d: %s", attempt, max_retries, last_error)
+            log.warning(
+                "llm_call attempt %d/%d schema=%s: %s | raw=%.80r",
+                attempt, max_retries, schema_name, last_error, raw_text,
+            )
 
         except ValidationError as exc:
             last_error = f"Schema validation: {exc}"
-            log.warning("LLM call attempt %d/%d: %s", attempt, max_retries, last_error)
+            log.warning(
+                "llm_call attempt %d/%d schema=%s validation failed: %s | raw=%.80r",
+                attempt, max_retries, schema_name, exc, raw_text,
+            )
             # Try repair on validation error
             try:
                 repair_prompt = _JSON_REPAIR_PROMPT.format(
@@ -163,6 +167,7 @@ def llm_call[T: BaseModel](
                 )
                 repaired_data = _parse_json(repaired_text)
                 value = response_model.model_validate(repaired_data)
+                log.info("llm_call repaired schema=%s attempt=%d", schema_name, attempt)
                 return LLMCallResult(
                     value=value,
                     success=True,
@@ -171,29 +176,26 @@ def llm_call[T: BaseModel](
                     raw_text=repaired_text,
                 )
             except Exception as repair_exc:
-                log.warning("Repair attempt failed: %s", repair_exc)
+                log.warning("llm_call repair failed schema=%s: %s", schema_name, repair_exc)
 
         except RuntimeError as exc:
             last_error = f"Provider error: {exc}"
             if attempt < max_retries:
                 wait = _BACKOFF_BASE**attempt
                 log.warning(
-                    "LLM provider error on attempt %d/%d: %s; retrying in %.1fs",
-                    attempt,
-                    max_retries,
-                    exc,
-                    wait,
+                    "LLM provider error on attempt %d/%d schema=%s: %s; retrying in %.1fs",
+                    attempt, max_retries, schema_name, exc, wait,
                 )
                 time.sleep(wait)
                 continue
-            log.warning("LLM provider error on attempt %d/%d: %s", attempt, max_retries, exc)
+            log.warning("LLM provider error on attempt %d/%d schema=%s: %s", attempt, max_retries, schema_name, exc)
 
         except Exception as exc:
             last_error = f"Unexpected: {exc}"
-            log.error("Unexpected LLM call error on attempt %d/%d: %s", attempt, max_retries, exc)
+            log.error("Unexpected llm_call error attempt %d/%d schema=%s: %s", attempt, max_retries, schema_name, exc)
             break  # Don't retry on unexpected errors
 
-    log.error("LLM call exhausted %d retries. Last error: %s", max_retries, last_error)
+    log.error("llm_call exhausted %d retries schema=%s. Last error: %s", max_retries, schema_name, last_error)
     return LLMCallResult(
         value=fallback,
         success=False,

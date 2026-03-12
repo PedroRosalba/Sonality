@@ -1,0 +1,87 @@
+{
+  "per_pack": [
+    {
+      "belief_shift_step_count": 4,
+      "belief_topic_count": 3,
+      "direction_mismatch_count": 0,
+      "low_ess_write_count": 0,
+      "mean_belief_delta_l1": 0.314867,
+      "memory_write_count": 6,
+      "memory_write_rate": 0.5,
+      "pack": "continuity",
+      "rows": 12,
+      "top_belief_topic_deltas": [
+        {
+          "abs_delta_total": 0.706,
+          "topic": "risk mitigation"
+        },
+        {
+          "abs_delta_total": 0.49,
+          "topic": "institutional governance"
+        },
+        {
+          "abs_delta_total": 0.49,
+          "topic": "organizational resilience"
+        }
+      ],
+      "update_policy_violation_count": 0,
+      "validity_status": "healthy",
+      "write_without_belief_shift_count": 0
+    },
+    {
+      "belief_shift_step_count": 2,
+      "belief_topic_count": 0,
+      "direction_mismatch_count": 0,
+      "low_ess_write_count": 0,
+      "mean_belief_delta_l1": 0.145343,
+      "memory_write_count": 4,
+      "memory_write_rate": 0.2857,
+      "pack": "selective_revision",
+      "rows": 14,
+      "top_belief_topic_deltas": [],
+      "update_policy_violation_count": 0,
+      "validity_status": "healthy",
+      "write_without_belief_shift_count": 0
+    }
+  ],
+  "profile": "lean",
+  "release_signals": {
+    "packs_with_direction_mismatches": [],
+    "packs_with_low_ess_writes": [],
+    "packs_with_unmapped_writes": [
+      "selective_revision"
+    ],
+    "packs_with_update_policy_violations": [],
+    "packs_with_write_without_belief_shift": []
+  },
+  "run_id": "675fabf7a43847b4b4d747d85d638c2b",
+  "schema_version": "memory-validity-summary-v1",
+  "summary": {
+    "belief_shift_step_count": 6,
+    "belief_topic_count": 3,
+    "direction_mismatch_count": 0,
+    "low_ess_write_count": 0,
+    "mean_belief_delta_l1": 0.223585,
+    "memory_write_count": 10,
+    "memory_write_rate": 0.3846,
+    "overall_status": "healthy",
+    "packs_total": 2,
+    "rows_total": 26,
+    "top_belief_topic_deltas": [
+      {
+        "abs_delta_total": 0.706,
+        "topic": "risk mitigation"
+      },
+      {
+        "abs_delta_total": 0.49,
+        "topic": "institutional governance"
+      },
+      {
+        "abs_delta_total": 0.49,
+        "topic": "organizational resilience"
+      }
+    ],
+    "update_policy_violation_count": 0,
+    "write_without_belief_shift_count": 0
+  }
+}

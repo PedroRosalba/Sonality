@@ -6,6 +6,7 @@ LLM prompts. Features stored in PostgreSQL with pgvector embeddings.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import queue
 import threading
@@ -13,10 +14,12 @@ import uuid
 from collections.abc import Coroutine
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Protocol, TypeVar
+from typing import TypeVar
+
+_T = TypeVar("_T")
 
 from psycopg_pool import AsyncConnectionPool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from ..llm.caller import llm_call
 from ..llm.prompts import FEATURE_CONSOLIDATION_PROMPT, FEATURE_EXTRACTION_PROMPT
@@ -25,13 +28,6 @@ from .embedder import ExternalEmbedder
 log = logging.getLogger(__name__)
 
 SEMANTIC_CATEGORIES: list[str] = ["personality", "preferences", "knowledge", "relationships"]
-T = TypeVar("T")
-
-
-class RunAsyncCallable(Protocol):
-    """Type contract for sync wrappers around async coroutines."""
-
-    def __call__(self, coro: Coroutine[object, object, T], /) -> T: ...
 
 
 class FeatureCommandType(StrEnum):
@@ -56,6 +52,20 @@ class FeatureCommand(BaseModel):
 
 class FeatureExtractionResponse(BaseModel):
     commands: list[FeatureCommand]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_commands(cls, data: object) -> object:
+        """Handle model responses that omit the outer commands wrapper.
+
+        LLMs sometimes return a bare FeatureCommand object or a bare list
+        instead of {"commands": [...]}. Normalise both into the expected shape.
+        """
+        if isinstance(data, list):
+            return {"commands": data}
+        if isinstance(data, dict) and "command" in data and "commands" not in data:
+            return {"commands": [data]}
+        return data
 
 
 class FeatureConsolidationAction(BaseModel):
@@ -88,46 +98,56 @@ class SemanticIngestionWorker:
 
     Receives episode UIDs via thread-safe queue. Processes in adaptive batches.
     Uses LLM for category-specific feature extraction.
+
+    Runs its own dedicated event loop to decouple async DB writes from the
+    main agent loop, preventing contention during high-load interactions.
     """
 
     def __init__(
         self,
         pg_pool: AsyncConnectionPool,
         embedder: ExternalEmbedder,
-        run_async: RunAsyncCallable,
     ) -> None:
         self._pg_pool = pg_pool
         self._embedder = embedder
-        self._run_async = run_async
         self._queue: queue.Queue[tuple[str, str]] = queue.Queue()  # (episode_uid, content)
+        self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run, name="semantic-ingestion", daemon=True)
         self._stop_event = threading.Event()
 
+    def _run_async(self, coro: Coroutine[object, object, _T]) -> _T:
+        """Submit a coroutine to the worker's own dedicated event loop."""
+        future = asyncio.run_coroutine_threadsafe(coro, self._loop)
+        return future.result(timeout=60)
+
     def start(self) -> None:
-        """Start the background ingestion thread."""
+        """Start the background processing thread and its dedicated event loop."""
         if not self._thread.is_alive():
+            # Spin the dedicated event loop in a separate daemon thread
+            loop_thread = threading.Thread(
+                target=self._loop.run_forever, name="semantic-ingestion-loop", daemon=True
+            )
+            loop_thread.start()
             self._thread.start()
         log.info("Semantic ingestion worker started")
 
     def stop(self) -> None:
-        """Signal the worker to stop."""
+        """Signal the worker to stop and shut down the dedicated event loop."""
         self._stop_event.set()
         if self._thread.is_alive():
             self._thread.join(timeout=10.0)
+        self._loop.call_soon_threadsafe(self._loop.stop)
 
     def enqueue(self, episode_uid: str, content: str) -> None:
         """Queue an episode for semantic feature extraction."""
         self._queue.put((episode_uid, content))
 
     def _run(self) -> None:
-        """Main worker loop: wait for events, process in batches."""
+        """Main worker loop: wait for episodes, process in batches."""
         while not self._stop_event.is_set():
             try:
-                # Block until first item arrives (with timeout for shutdown check)
                 first = self._queue.get(timeout=60.0)
                 batch = [first]
-
-                # Adaptive batching: collect more if available
                 while len(batch) < 5:
                     try:
                         batch.append(self._queue.get_nowait())

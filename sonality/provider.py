@@ -14,8 +14,78 @@ from . import config
 log = logging.getLogger(__name__)
 
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
-_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
 _EMPTY_MAPPING: dict[str, object] = {}
+_THINKING_ANSWER_MARKERS = ("Final Output:", "Output:", "Answer:", "Final Answer:", "Response:")
+
+
+def extract_last_json_object(text: str) -> dict[str, object] | None:
+    """Find the last valid JSON object in text, scanning left-to-right with raw_decode.
+
+    Uses json.JSONDecoder.raw_decode to parse JSON starting at each '{' position and
+    return where it ends. Scanning all '{' positions and keeping the last successful
+    parse means a model self-correction ("actually: {...}") produces the corrected value.
+    Handles markdown fences, trailing prose, nested braces, and multiple JSON blocks.
+    """
+    stripped = text.strip()
+    # Strip markdown code fences first, then remove invalid JSON + prefixes on numbers
+    cleaned = stripped.replace("```json", "").replace("```", "").strip()
+    # +0.42 and +1 are not valid JSON; strip leading + from numeric literals
+    cleaned = re.sub(r":\s*\+(\d)", r": \1", cleaned)
+    decoder = json.JSONDecoder()
+    last_good: dict[str, object] | None = None
+    i = 0
+    while i < len(cleaned):
+        if cleaned[i] != "{":
+            i += 1
+            continue
+        try:
+            obj, end = decoder.raw_decode(cleaned, i)
+            if isinstance(obj, dict):
+                last_good = obj
+            i = end
+        except json.JSONDecodeError:
+            i += 1
+    return last_good
+
+
+def _extract_answer_from_reasoning(reasoning: str) -> str:
+    """Extract answer from thinking model reasoning_content field.
+
+    Thinking models like Qwen 3.5 A3B output their chain-of-thought in reasoning_content
+    and may leave content empty when max_tokens is insufficient. This function attempts
+    to extract the final answer portion from the reasoning.
+
+    Priority order:
+    1. Text after a known answer marker (captures both single-line and multi-line answers)
+    2. Last JSON object or array block in the reasoning
+    3. Last non-empty line (plain-text fallback)
+    """
+    # 1. Marker-based extraction — take everything after the last marker
+    for marker in _THINKING_ANSWER_MARKERS:
+        idx = reasoning.lower().rfind(marker.lower())
+        if idx != -1:
+            answer = reasoning[idx + len(marker) :].strip()
+            if answer:
+                return answer
+    # 2. Last balanced JSON object/array in the reasoning
+    for opener, closer in (("{", "}"), ("[", "]")):
+        end = reasoning.rfind(closer)
+        if end != -1:
+            depth = 0
+            for i in range(end, -1, -1):
+                if reasoning[i] == closer:
+                    depth += 1
+                elif reasoning[i] == opener:
+                    depth -= 1
+                    if depth == 0:
+                        candidate = reasoning[i : end + 1].strip()
+                        if len(candidate) > 2:
+                            return candidate
+    # 3. Last non-empty line
+    for line in reversed(reasoning.strip().splitlines()):
+        if line.strip():
+            return line.strip()
+    return ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,27 +108,30 @@ def _to_nonnegative_int(value: object) -> int:
     return 0
 
 
-def _headers() -> dict[str, str]:
+def _headers(api_key: str = "") -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    if config.API_KEY:
-        headers["Authorization"] = f"Bearer {config.API_KEY}"
+    key = api_key or config.API_KEY
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
     return headers
 
 
-def _endpoint(path: str) -> str:
-    base = config.BASE_URL.rstrip("/")
+def _endpoint(path: str, base_url: str = "") -> str:
+    base = (base_url or config.BASE_URL).rstrip("/")
     normalized = path if path.startswith("/") else f"/{path}"
     return f"{base}{normalized}"
 
 
-def _post_json(path: str, payload: Mapping[str, object]) -> dict[str, object]:
+def _post_json(
+    path: str, payload: Mapping[str, object], base_url: str = "", api_key: str = ""
+) -> dict[str, object]:
     body = json.dumps(payload).encode("utf-8")
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         request = Request(
-            _endpoint(path),
+            _endpoint(path, base_url),
             data=body,
-            headers=_headers(),
+            headers=_headers(api_key),
             method="POST",
         )
         try:
@@ -163,6 +236,10 @@ def chat_completion(
             message = first.get("message")
             if isinstance(message, dict):
                 text = _message_content_text(message.get("content", ""))
+                if not text:
+                    reasoning = message.get("reasoning_content")
+                    if isinstance(reasoning, str) and reasoning:
+                        text = _extract_answer_from_reasoning(reasoning)
     usage = raw.get("usage")
     input_tokens = 0
     output_tokens = 0
@@ -188,7 +265,8 @@ def embed(
     payload: dict[str, object] = {"model": model, "input": texts}
     if dimensions > 0:
         payload["dimensions"] = dimensions
-    raw = _post_json("/embeddings", payload)
+    api_key = config.EMBEDDING_API_KEY or config.API_KEY
+    raw = _post_json("/embeddings", payload, config.EMBEDDING_BASE_URL, api_key)
     data = raw.get("data")
     if not isinstance(data, list):
         raise RuntimeError("Embedding response is missing `data` array")
@@ -206,27 +284,21 @@ def embed(
 
 
 def parse_json_object(text: str) -> dict[str, object]:
+    """Extract a JSON object from LLM response text.
+
+    Tries direct parse first (fast path), then falls through to extract_last_json_object
+    which handles markdown fences, multiple JSON blocks, trailing prose, and nested braces.
+    """
     stripped = text.strip()
     if not stripped:
         return {}
-    for candidate in (
-        stripped,
-        stripped.replace("```json", "").replace("```", "").strip(),
-    ):
-        try:
-            parsed = json.loads(candidate)
-        except json.JSONDecodeError:
-            continue
+    try:
+        parsed = json.loads(stripped)
         if isinstance(parsed, dict):
             return parsed
-    block_match = _JSON_BLOCK_RE.search(stripped)
-    if block_match is None:
-        return {}
-    try:
-        parsed = json.loads(block_match.group(0))
     except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        pass
+    return extract_last_json_object(stripped) or {}
 
 
 def extract_tool_call_arguments(

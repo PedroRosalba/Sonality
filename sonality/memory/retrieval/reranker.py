@@ -69,8 +69,12 @@ def rerank_episodes(
 
     if result.success:
         ranking = result.value.ranking
-        log.debug(
-            "Reranked %d candidates. Reasoning: %s", len(to_rank), result.value.reasoning[:80]
+        log.info(
+            "Reranked %d→%d candidates. Top=%s | %s",
+            len(to_rank),
+            top_k or len(to_rank),
+            ranking[:5],
+            result.value.reasoning[:80] if result.value.reasoning else "no reasoning",
         )
 
         # Map 1-indexed ranking to 0-indexed episodes
@@ -88,7 +92,14 @@ def rerank_episodes(
                 reranked.append(ep)
 
         final = reranked[:top_k] if top_k > 0 else reranked
+        if final:
+            top = final[0]
+            log.debug(
+                "Top episode after rerank: %s | summary=%.80s",
+                top.uid[:8],
+                top.summary or top.content[:80],
+            )
         return final
 
-    # Fallback: return in original order
+    log.warning("Rerank fallback: %d candidates unchanged", len(to_rank))
     return to_rank[:top_k] if top_k > 0 else to_rank

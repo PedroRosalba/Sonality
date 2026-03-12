@@ -10,7 +10,7 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..llm.caller import llm_call
 from ..llm.prompts import BATCH_FORGETTING_PROMPT
@@ -34,6 +34,16 @@ class ForgettingDecision(BaseModel):
 
 class BatchForgettingResponse(BaseModel):
     decisions: list[ForgettingDecision]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_decisions(cls, data: object) -> object:
+        """Handle LLM responses that omit the outer decisions wrapper."""
+        if isinstance(data, list):
+            return {"decisions": data}
+        if isinstance(data, dict) and "uid" in data and "decisions" not in data:
+            return {"decisions": [data]}
+        return data
 
 
 @dataclass(frozen=True, slots=True)

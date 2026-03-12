@@ -13,7 +13,7 @@ import logging
 import uuid
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from .. import config
 from ..llm.caller import llm_call
@@ -35,6 +35,12 @@ class ConsolidationReadinessResponse(BaseModel):
     confidence: float = 0.0
     reasoning: str = ""
     suggested_summary_focus: str = ""
+
+    @field_validator("suggested_summary_focus", mode="before")
+    @classmethod
+    def coerce_null_focus(cls, v: object) -> str:
+        """Accept null from model (common when NOT_READY) and coerce to empty string."""
+        return "" if v is None else str(v)
 
 
 class ConsolidationEngine:

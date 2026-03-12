@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from ..llm.caller import llm_call
 from ..llm.prompts import CHUNKING_PROMPT
@@ -35,6 +35,16 @@ class ChunkItem(BaseModel):
 
 class ChunkingResponse(BaseModel):
     chunks: list[ChunkItem]
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_chunks(cls, data: object) -> object:
+        """Handle LLM responses that omit the outer chunks wrapper."""
+        if isinstance(data, list):
+            return {"chunks": data}
+        if isinstance(data, dict) and "text" in data and "chunks" not in data:
+            return {"chunks": [data]}
+        return data
 
 
 @dataclass(frozen=True, slots=True)

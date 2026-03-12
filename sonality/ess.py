@@ -88,6 +88,9 @@ SOURCE_RELIABILITY_ALIASES: Final[dict[str, SourceReliability]] = {
     "n_a": SourceReliability.NOT_APPLICABLE,
 }
 INTERNAL_CONSISTENCY_ALIASES: Final[dict[str, InternalConsistencyStatus]] = {
+    # _normalize_label() lowercases everything, so "CONSISTENT" → "consistent"
+    "consistent": InternalConsistencyStatus.CONSISTENT,
+    "inconsistent": InternalConsistencyStatus.INCONSISTENT,
     "true": InternalConsistencyStatus.CONSISTENT,
     "false": InternalConsistencyStatus.INCONSISTENT,
     "yes": InternalConsistencyStatus.CONSISTENT,
@@ -469,7 +472,7 @@ def _run_classification_attempts(
         if client is not PROVIDER_CLIENT:
             response = client.messages.create(
                 model=model,
-                max_tokens=512,
+                max_tokens=config.FAST_LLM_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt_with_retry_guidance}],
                 tools=[ESS_TOOL],
                 tool_choice={"type": "tool", "name": "classify_evidence"},
@@ -481,7 +484,7 @@ def _run_classification_attempts(
         else:
             completion = chat_completion(
                 model=model,
-                max_tokens=512,
+                max_tokens=config.FAST_LLM_MAX_TOKENS,
                 temperature=0.0,
                 messages=(
                     {

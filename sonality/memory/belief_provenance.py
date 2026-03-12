@@ -30,6 +30,7 @@ def _append_unique_uid(values: list[str], uid: str) -> None:
 class UpdateMagnitude(StrEnum):
     MAJOR = "MAJOR"
     MINOR = "MINOR"
+    NONE = "NONE"  # Model may return NONE when evidence has no impact
 
 
 class ContractionAction(StrEnum):

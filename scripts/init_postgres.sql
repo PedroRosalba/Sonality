@@ -8,18 +8,14 @@ CREATE TABLE IF NOT EXISTS derivatives (
     text TEXT NOT NULL,
     key_concept TEXT NOT NULL DEFAULT '',
     sequence_num INTEGER NOT NULL DEFAULT 0,
-    embedding vector(4096) NOT NULL,
+    embedding vector(768) NOT NULL,
     archived BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_derivatives_episode ON derivatives (episode_uid);
 CREATE INDEX IF NOT EXISTS idx_derivatives_archived ON derivatives (archived) WHERE NOT archived;
-
--- HNSW index for fast cosine similarity search
-CREATE INDEX IF NOT EXISTS idx_derivatives_embedding ON derivatives
-USING hnsw (embedding vector_cosine_ops)
-WITH (m = 16, ef_construction = 128);
+CREATE INDEX IF NOT EXISTS idx_derivatives_embedding ON derivatives USING hnsw (embedding vector_cosine_ops);
 
 -- Semantic features (personality, preferences, knowledge, relationships)
 CREATE TABLE IF NOT EXISTS semantic_features (
@@ -30,13 +26,14 @@ CREATE TABLE IF NOT EXISTS semantic_features (
     value TEXT NOT NULL,
     episode_citations TEXT[] NOT NULL DEFAULT '{}',
     confidence REAL NOT NULL DEFAULT 0.0,
-    embedding vector(4096),
+    embedding vector(768),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_semantic_features_category ON semantic_features (category);
 CREATE INDEX IF NOT EXISTS idx_semantic_features_tag ON semantic_features (category, tag);
+CREATE INDEX IF NOT EXISTS idx_semantic_features_embedding ON semantic_features USING hnsw (embedding vector_cosine_ops) WHERE embedding IS NOT NULL;
 
 -- STM state persistence (crash recovery)
 CREATE TABLE IF NOT EXISTS stm_state (

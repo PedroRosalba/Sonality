@@ -97,14 +97,17 @@ class QueryRouter:
                 reasoning=response.reasoning,
             )
             log.info(
-                "Query routed: category=%s depth=%s temporal=%s",
+                "Query routed: category=%s depth=%s n=%d temporal=%s semantic=%s | %s",
                 decision.category,
                 decision.depth,
+                decision.n_results,
                 decision.temporal_expansion,
+                decision.semantic_memory,
+                response.reasoning[:100] if response.reasoning else "no reasoning",
             )
             return decision
 
-        # Fallback: moderate simple search
+        log.warning("Query routing fallback: result.success=%s error=%s", result.success, result.error)
         return RoutingDecision(
             category=QueryCategory.SIMPLE,
             depth=RetrievalDepth.MODERATE,

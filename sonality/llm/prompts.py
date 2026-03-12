@@ -66,17 +66,21 @@ Decide whether the agent should run reflection this turn.
 
 Current interaction: {interaction_count}
 Interactions since last reflection: {window_interactions}
-Target cadence (guideline only): every ~{target_cadence} interactions
+Target cadence: every ~{target_cadence} interactions
 Pending insights: {pending_insights}
 Pending staged belief updates: {staged_updates}
 Recent shift magnitude since last reflection: {recent_shift_magnitude}
 Current disagreement rate: {disagreement_rate}
 Tracked belief count: {belief_count}
 
+HARD RULE: Return SKIP if window_interactions < 5, regardless of other factors.
+EVENT_DRIVEN is only valid when window_interactions >= 5 AND pending_insights >= 3 AND recent_shift_magnitude >= 0.5.
+PERIODIC is valid when window_interactions >= target_cadence.
+
 Choose:
-- SKIP: no meaningful new synthesis needed
+- SKIP: window < 5, or no meaningful new synthesis needed
 - PERIODIC: enough elapsed context to do a maintenance reflection
-- EVENT_DRIVEN: meaningful recent change warrants reflection now
+- EVENT_DRIVEN: significant accumulation (see HARD RULE above)
 
 Return JSON:
 {{
