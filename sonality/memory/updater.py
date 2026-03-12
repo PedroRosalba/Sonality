@@ -13,6 +13,12 @@ from ..prompts import INSIGHT_PROMPT
 
 log = logging.getLogger(__name__)
 
+_INSIGHT_PLACEHOLDERS: frozenset[str] = frozenset({
+    "one sentence describing the reasoning pattern",
+    "your insight here",
+    "insert insight here",
+})
+
 MIN_SNAPSHOT_RETENTION: Final = 0.6
 SNAPSHOT_CHAR_LIMIT: Final[int] = config.SPONGE_MAX_TOKENS * 5
 
@@ -77,13 +83,14 @@ def extract_insight(
         max_tokens=config.FAST_LLM_MAX_TOKENS,
     )
     if not result.success:
-        raise ValueError("Insight extraction returned invalid decision payload")
+        log.warning("Insight extraction parse failed (returning empty): %s", result.error)
+        return ""
     response = result.value
     if response.insight_decision is not InsightDecision.EXTRACT:
         log.info("No personality insight extracted")
         return ""
     text = response.insight_text.strip()
-    if not text:
+    if not text or text.lower() in _INSIGHT_PLACEHOLDERS:
         log.info("No personality insight extracted")
         return ""
     log.info("Insight extracted: %s", text[:80])

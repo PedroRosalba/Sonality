@@ -14,29 +14,18 @@ from typing import Final
 
 # --- Semantic Chunking (DerivativeChunker) ---
 CHUNKING_PROMPT: Final = """\
-You are a memory chunking system. Split this text into semantically coherent chunks
-for vector embedding and retrieval.
+Split this text into semantically coherent chunks for memory retrieval.
 
-Text to chunk:
+Text:
 {text}
 
-Guidelines:
-- Each chunk should be a self-contained unit of meaning
-- Keep related ideas together (don't split mid-thought)
-- Preserve important context that aids retrieval
-- Aim for 1-3 sentences per chunk (flexible based on content)
-- Normalize obvious typos or grammar issues for better embedding
-- Maximum 15 chunks for any input
+Rules:
+- Each chunk is a self-contained idea (1-3 sentences)
+- Maximum 15 chunks
+- importance: high (key claim/fact), medium (supporting detail), low (context only)
 
-Respond with ONLY a JSON object. Example:
-{{
-  "chunks": [
-    {{"text": "Nuclear power produces 12g CO2/kWh versus 820g for coal.", "key_concept": "nuclear CO2 advantage", "importance": "high"}},
-    {{"text": "France generates 70% of its electricity from nuclear with excellent safety records.", "key_concept": "France nuclear safety", "importance": "medium"}}
-  ]
-}}
-
-importance must be high, medium, or low."""
+Output ONLY a JSON object in this exact format (replace the example chunks with chunks from the text above):
+{{"chunks": [{{"text": "Nuclear power emits 12g CO2/kWh vs 820g for coal.", "key_concept": "nuclear CO2 emissions", "importance": "high"}}, {{"text": "France produces 70% of electricity from nuclear.", "key_concept": "France nuclear share", "importance": "medium"}}]}}"""
 
 # --- Event Boundary Detection ---
 BOUNDARY_DETECTION_PROMPT: Final = """\
@@ -110,8 +99,8 @@ Also determine:
 - Needs temporal expansion: Should we fetch adjacent episodes for context?
 - Search semantic memory: Should we query belief/profile data?
 
-Respond with ONLY a JSON object. Example:
-{{"category": "TEMPORAL", "depth": "MODERATE", "temporal_expansion": "EXPAND", "semantic_memory": "SKIP", "reasoning": "Query asks about past discussions requiring chronological retrieval."}}
+Respond with ONLY a JSON object (fill in YOUR values — do NOT copy this example verbatim):
+{{"category": "TEMPORAL", "depth": "MODERATE", "temporal_expansion": "EXPAND", "semantic_memory": "SKIP", "reasoning": "User is asking about events from a previous session."}}
 
 category must be: NONE, SIMPLE, TEMPORAL, MULTI_ENTITY, AGGREGATION, or BELIEF_QUERY.
 depth must be: MINIMAL, MODERATE, or DEEP.
@@ -267,13 +256,13 @@ Consider:
 - Should this evidence significantly change confidence/uncertainty?
 - Does this warrant AGM-style belief contraction?
 
-Respond with ONLY a JSON object. Example:
-{{"direction": 0.3, "evidence_strength": 0.6, "new_uncertainty": 0.2, "reasoning": "Strong empirical data supports a moderate shift toward positive.", "update_magnitude": "MINOR", "contraction_action": "NONE"}}
+Output ONLY a JSON object (fill in YOUR values — do NOT copy this example):
+{{"direction": 0.3, "evidence_strength": 0.6, "new_uncertainty": 0.2, "reasoning": "Peer-reviewed RCT evidence warrants a modest positive shift.", "update_magnitude": "MINOR", "contraction_action": "NONE"}}
 
-direction is a float from -1.0 to +1.0.
-evidence_strength and new_uncertainty are floats from 0.0 to 1.0.
-update_magnitude must be MAJOR or MINOR.
-contraction_action must be CONTRACT or NONE."""
+direction: float -1.0 to +1.0 (negative = contradicts belief, positive = supports).
+evidence_strength and new_uncertainty: floats 0.0 to 1.0.
+update_magnitude: MAJOR or MINOR.
+contraction_action: CONTRACT or NONE."""
 
 # --- Structural Disagreement Detection ---
 DISAGREEMENT_DETECTION_PROMPT: Final = """\
@@ -389,40 +378,30 @@ Category to extract for: {category}
 Existing features in this category:
 {existing_features}
 
-Respond with ONLY a JSON object. Example:
+Your response must be ONLY this JSON object with actual values filled in (no {{"..."}}, no placeholders):
 {{
   "commands": [
     {{"command": "add", "tag": "Communication Style", "feature": "humor_style", "value": "dry wit with occasional puns", "confidence": 0.8}},
-    {{"command": "update", "tag": "Technical Skills", "feature": "python_level", "value": "advanced", "confidence": 0.9}},
-    {{"command": "delete", "tag": "Preferences", "feature": "old_preference", "reason": "contradicted by new evidence"}}
+    {{"command": "update", "tag": "Technical Skills", "feature": "python_level", "value": "advanced", "confidence": 0.9}}
   ]
 }}
-
-command must be add, update, or delete.
-confidence is a float from 0.0 to 1.0."""
+If no features should be added/updated/deleted, return: {{"commands": []}}
+command must be add, update, or delete. confidence is a float from 0.0 to 1.0."""
 
 # --- Semantic Feature Consolidation ---
 FEATURE_CONSOLIDATION_PROMPT: Final = """\
-Review semantic features in one category and decide whether consolidation is needed.
+Review semantic features in the {category} category and decide if any are redundant enough to merge.
 
-Category: {category}
-Current features:
+Features:
 {features}
 
-Consolidation means merging redundant/overlapping features into one canonical feature.
-Only propose merges when meaning is truly overlapping or duplicate.
-Do not merge distinct facts.
+Consolidation means merging features that describe the same trait with different wording.
+Do NOT merge features that describe distinct behaviors or facts.
 
-Respond with ONLY a JSON object. Example when consolidation is needed:
-{{
-  "consolidation_decision": "CONSOLIDATE",
-  "reasoning": "Two features describe the same communication style.",
-  "actions": [
-    {{"source_uid": "feat-abc", "target_uid": "feat-xyz", "canonical_tag": "Communication Style", "canonical_feature": "humor_style", "canonical_value": "dry wit", "reason": "feat-abc is a duplicate of feat-xyz"}}
-  ]
-}}
+Output ONLY a JSON object (do NOT output the category name or any prose):
+{{"consolidation_decision": "SKIP", "reasoning": "All features are distinct.", "actions": []}}
 
-Example when no consolidation is needed:
-{{"consolidation_decision": "SKIP", "reasoning": "All features are distinct with no overlap.", "actions": []}}
+If merging is needed, use CONSOLIDATE and list actions:
+{{"consolidation_decision": "CONSOLIDATE", "reasoning": "Two features describe the same style.", "actions": [{{"source_uid": "feat-abc", "target_uid": "feat-xyz", "canonical_tag": "Communication Style", "canonical_feature": "humor_style", "canonical_value": "dry wit", "reason": "duplicate"}}]}}
 
 consolidation_decision must be CONSOLIDATE or SKIP."""

@@ -120,15 +120,15 @@ User: {user_message}
 Agent: {agent_response}
 Evidence strength: {ess_score}
 
-The final thing you output must be a JSON object with these two fields filled in with actual values:
-- insight_decision: write EXTRACT if you found an identity-forming insight, or SKIP if not
-- insight_text: write the one-sentence insight when EXTRACT, or an empty string when SKIP
+Your response must end with ONLY a JSON object matching one of these formats:
 
-Example output when insight found:
-{{"insight_decision": "EXTRACT", "insight_text": "Prefers concrete data over general principles when evaluating claims"}}
+When an insight was found (replace the example text with your actual observation):
+{{"insight_decision": "EXTRACT", "insight_text": "Prefers structural explanations over anecdotal evidence"}}
 
-Example output when nothing notable:
-{{"insight_decision": "SKIP", "insight_text": ""}}"""
+When nothing identity-forming happened:
+{{"insight_decision": "SKIP", "insight_text": ""}}
+
+Do NOT copy the example insight_text — replace it with the actual observation you found."""
 
 
 REFLECTION_PROMPT = """\

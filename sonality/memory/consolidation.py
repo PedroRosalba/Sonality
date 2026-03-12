@@ -121,8 +121,10 @@ class ConsolidationEngine:
             fallback=ConsolidationReadinessResponse(),
         )
         if not result.success:
-            raise ValueError(
-                f"Consolidation readiness returned invalid payload for segment={segment_id}"
+            log.warning(
+                "Consolidation readiness parse failed for segment=%s (returning NOT_READY fallback): %s",
+                segment_id,
+                result.error,
             )
         return result.value
 

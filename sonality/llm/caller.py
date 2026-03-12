@@ -17,11 +17,10 @@ log = logging.getLogger(__name__)
 _MAX_RETRIES: Final = 2
 _BACKOFF_BASE: Final = 1.5
 _JSON_SYSTEM_PROMPT: Final = (
-    "You are a structured data extractor. "
-    "Think through the task if needed, then end your response with ONLY a valid JSON object. "
-    "The JSON object must be the very last thing you output. "
+    "Output ONLY a valid JSON object. "
+    "Do not include any explanation, preamble, markdown fences, or reasoning before or after the JSON. "
     "Do NOT use pipe characters (|), schema type annotations, or placeholder text as values — fill in actual values only. "
-    "No markdown fences around the final JSON."
+    "Your entire response must be the JSON object and nothing else."
 )
 _JSON_REPAIR_PROMPT: Final = (
     "The following JSON is malformed or does not match the required schema.\n"

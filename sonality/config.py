@@ -91,6 +91,10 @@ RETRIEVAL_CONFIDENCE_THRESHOLD: Final = _env_float("SONALITY_RETRIEVAL_CONFIDENC
 RETRIEVAL_OVER_FETCH_FACTOR: Final = _env_int("SONALITY_RETRIEVAL_OVER_FETCH_FACTOR", 3)
 MAX_RERANK_CANDIDATES: Final = _env_int("SONALITY_MAX_RERANK_CANDIDATES", 25)
 
+# Timeout (seconds) for async operations run from sync context via run_coroutine_threadsafe.
+# Increase for slow local LLMs that need > 120 s per inference call.
+ASYNC_TIMEOUT: Final = _env_int("SONALITY_ASYNC_TIMEOUT", 300)
+
 
 def missing_live_api_config() -> tuple[str, ...]:
     """Return required live configuration keys that are currently unset.

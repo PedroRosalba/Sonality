@@ -89,7 +89,7 @@ def assess_health(sponge: SpongeState) -> HealthReport:
         fallback=HealthResponse(),
     )
     if not result.success:
-        raise ValueError("Health assessment returned invalid decision payload")
+        log.warning("Health assessment parse failed (using default fallback): %s", result.error)
     response = result.value
     report = HealthReport(
         overall_health=response.overall_health,

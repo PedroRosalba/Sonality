@@ -16,6 +16,10 @@ from .. import config
 
 log = logging.getLogger(__name__)
 
+# Neo4j emits INFORMATION-level GqlStatus notifications when IF NOT EXISTS constraints
+# already exist. These are harmless but very verbose in test/startup logs.
+logging.getLogger("neo4j.notifications").setLevel(logging.WARNING)
+
 # Neo4j schema initialization Cypher statements
 _NEO4J_INIT_STATEMENTS: list[str] = [
     "CREATE CONSTRAINT episode_uid IF NOT EXISTS FOR (e:Episode) REQUIRE e.uid IS UNIQUE",

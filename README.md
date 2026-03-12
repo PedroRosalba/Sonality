@@ -36,11 +36,22 @@ flowchart TD
     CONSOLIDATE --> SAVE
 ```
 
-Every interaction runs 2–3 LLM API calls:
+Every interaction runs **8–15 LLM calls** (7–12 synchronous, 1–4 async background):
 
-1. **Response generation** — assembles core identity + personality snapshot + structured traits + retrieved episodes into a system prompt, sends to the LLM
-2. **ESS classification** — separate LLM call evaluates the *user's* argument quality (score 0.0–1.0) using structured tool output. Agent's response is excluded to avoid self-judge bias
-3. **Insight extraction** — extracts a one-sentence personality insight when ESS output quality passes reliability gates (accumulated, consolidated during reflection)
+**Synchronous (blocks response):**
+1. **Query routing** — classifies query (SIMPLE/TEMPORAL/MULTI_ENTITY/AGGREGATION/BELIEF_QUERY/NONE) to select optimal retrieval strategy
+2. **Listwise reranking** — LLM reorders retrieved episodes by semantic relevance to query
+3. **Response generation** — core identity + personality snapshot + structured traits + retrieved episodes → response
+4. **ESS classification** — evaluates *user's* argument quality (0.0–1.0); agent response excluded to prevent self-judge bias
+5. **Segment boundary detection** — event-driven detection of topic shifts for episode segmentation
+6. **Belief provenance update** — per-topic LLM assessment with AGM-style contraction handling (1–5 calls depending on active topics)
+7. **Insight extraction** — one-sentence personality observation extracted when ESS quality passes reliability gates
+
+**Async background (non-blocking):**
+8. **Episodic memory storage** — LLM semantic chunking splits interaction into 1–15 derivative chunks embedded via Ollama
+9. **Semantic feature extraction** — extracts persistent personality profile features across 4 categories (personality, preferences, knowledge, relationships)
+
+Periodically: **reflection** (consolidates insights, decays unreinforced beliefs, validates snapshot integrity, every ~20 interactions).
 
 Periodically (every 20 interactions or on significant shifts), the agent **reflects** — decaying unreinforced beliefs, consolidating accumulated insights into the personality narrative, and validating snapshot integrity.
 
@@ -99,17 +110,43 @@ Decision semantics:
 
 ## Quick Start
 
+**With a cloud provider:**
+
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 make install
-cp .env.example .env   # add your SONALITY_API_KEY
+cp .env.example .env   # set SONALITY_BASE_URL + SONALITY_API_KEY
+make run
+```
+
+**With a local setup (Ollama for embeddings, local LLM endpoint):**
+
+```bash
+# Start databases
+docker compose up -d neo4j postgres
+
+# Pull embedding model into your local Ollama
+ollama pull nomic-embed-text
+
+# Configure .env for local endpoints
+cat > .env << 'EOF'
+SONALITY_BASE_URL=http://localhost:11434/v1   # or your local LLM server
+SONALITY_API_KEY=
+SONALITY_MODEL=your-local-model-name
+SONALITY_EMBEDDING_BASE_URL=http://localhost:11434/v1
+SONALITY_EMBEDDING_SEND_DIMENSIONS=false
+SONALITY_FAST_LLM_MAX_TOKENS=4096            # thinking models need more tokens
+SONALITY_ASYNC_TIMEOUT=300                   # slow local models need longer timeout
+SONALITY_POSTGRES_URL=postgresql://sonality:sonality_password@localhost:5433/sonality
+EOF
+
 make run
 ```
 
 Or with Docker:
 
 ```bash
-cp .env.example .env   # add provider + API key
+cp .env.example .env   # set provider + API key or local endpoints
 docker compose run --rm sonality
 ```
 
@@ -136,11 +173,15 @@ Set in `.env` (see `.env.example`):
 
 | Variable | Default | Description |
 |---|---|---|
-| `SONALITY_API_KEY` | *(required)* | API key for the configured provider endpoint |
-| `SONALITY_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API endpoint |
-| `SONALITY_MODEL` | *(see .env.example)* | Main reasoning model |
-| `SONALITY_ESS_MODEL` | same as `SONALITY_MODEL` | Model for ESS classification |
-| `SONALITY_EMBEDDING_MODEL` | `Qwen/Qwen3-Embedding-8B` | Embedding model ID (same provider path) |
+| `SONALITY_API_KEY` | *(empty — optional for local endpoints)* | API key; leave empty for local LLM servers |
+| `SONALITY_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible chat endpoint |
+| `SONALITY_MODEL` | `gpt-4.1-mini` | Main reasoning model |
+| `SONALITY_ESS_MODEL` | same as `SONALITY_MODEL` | Model for ESS classification (separate model reduces self-judge bias) |
+| `SONALITY_EMBEDDING_BASE_URL` | same as `SONALITY_BASE_URL` | Embedding endpoint; set to `http://localhost:11434/v1` for Ollama |
+| `SONALITY_EMBEDDING_MODEL` | `nomic-embed-text` | Embedding model ID |
+| `SONALITY_EMBEDDING_SEND_DIMENSIONS` | `true` | Set `false` for Ollama models that don't accept a `dimensions` parameter |
+| `SONALITY_FAST_LLM_MAX_TOKENS` | `1024` | Token budget for structured-output calls; **increase to 4096 for thinking/CoT models** |
+| `SONALITY_ASYNC_TIMEOUT` | `300` | Seconds to wait for async operations; increase for slow local LLMs |
 | `SONALITY_OPINION_COOLING_PERIOD` | `3` | Interactions before staged belief commits |
 | `SONALITY_REFLECTION_EVERY` | `20` | Interactions between periodic reflections |
 | `SONALITY_BOOTSTRAP_DAMPENING_UNTIL` | `10` | Early interactions get 0.5× update magnitude |
@@ -323,21 +364,36 @@ sonality/
 │   ├── cli.py                  Terminal REPL
 │   ├── config.py               Environment + compile-time constants
 │   ├── ess.py                  Evidence Strength Score classifier
-│   ├── prompts.py              All LLM prompt templates
+│   ├── prompts.py              Agent-level LLM prompt templates
+│   ├── provider.py             HTTP LLM/embedding provider + JSON normalization
+│   ├── llm/
+│   │   ├── caller.py           Universal structured LLM call wrapper (retry, repair, fallback)
+│   │   └── prompts.py          Memory-subsystem LLM prompt templates
 │   └── memory/
 │       ├── sponge.py           SpongeState model, staged updates, persistence
-│       ├── dual_store.py       Path A episode storage (Neo4j + pgvector)
-│       └── graph.py            Graph traversal, provenance, utility updates
-├── tests/                      Correctness/unit/integration tests
+│       ├── dual_store.py       Episode storage coordinator (Neo4j + pgvector)
+│       ├── graph.py            Neo4j graph traversal, provenance edges, belief nodes
+│       ├── db.py               Database connection pool (Neo4j + PostgreSQL/pgvector)
+│       ├── derivatives.py      LLM-based semantic chunking → vector derivatives
+│       ├── embedder.py         Embedding calls (Ollama or any OpenAI-compatible endpoint)
+│       ├── semantic_features.py Async personality feature extraction and consolidation
+│       ├── belief_provenance.py Belief evidence assessment with AGM contraction
+│       ├── segmentation.py     Conversation segment boundary detection
+│       ├── updater.py          Insight extraction and snapshot validation
+│       ├── health.py           Personality health metric computation
+│       ├── consolidation.py    Segment consolidation readiness and summarization
+│       ├── stm_consolidator.py Background short-term memory consolidation worker
+│       └── retrieval/
+│           ├── router.py       Query intent routing (6 categories, 3 depth levels)
+│           ├── chain.py        Iterative sufficiency-checking retrieval
+│           ├── reranker.py     LLM listwise episode reranker
+│           └── split.py        Multi-entity query decomposition
+├── tests/                      Unit + integration tests (non-live by default)
+│   └── test_memory_health.py   Graduated live memory health suite (L1–L5)
 ├── benches/                    Evaluation/benchmark suites (pytest, opt-in)
-│   ├── scenario_contracts.py   Shared scenario expectation contracts
-│   ├── live_scenarios.py       Live/evaluation scenario definitions
-│   ├── scenario_runner.py      Shared benchmark scenario executor
-│   └── teaching_harness.py     Teaching-suite evaluation harness + artifacts
-├── docs/                       Documentation source (Zensical/MkDocs)
+├── docs/                       Documentation source
 ├── pyproject.toml              Dependencies and tool config
-├── zensical.toml               Documentation site config
 ├── Makefile                    Dev workflows
 ├── Dockerfile                  Container build
-└── docker-compose.yml          Container orchestration
+└── docker-compose.yml          Neo4j + PostgreSQL orchestration
 ```

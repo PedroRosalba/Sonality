@@ -97,7 +97,11 @@ async def assess_belief_evidence(
         fallback=BeliefUpdateResponse(direction=0.0, evidence_strength=0.0),
     )
     if not result.success:
-        raise ValueError("Belief evidence assessment returned invalid decision payload")
+        log.warning(
+            "Belief evidence assessment parse failed for topic=%s (using neutral fallback): %s",
+            topic,
+            result.error,
+        )
     response = result.value
 
     # Update provenance in BeliefMeta

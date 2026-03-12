@@ -51,7 +51,7 @@ class FeatureCommand(BaseModel):
 
 
 class FeatureExtractionResponse(BaseModel):
-    commands: list[FeatureCommand]
+    commands: list[FeatureCommand] = Field(default_factory=list)
 
     @model_validator(mode="before")
     @classmethod
@@ -189,10 +189,12 @@ class SemanticIngestionWorker:
             fallback=FeatureExtractionResponse(commands=[]),
         )
         if not result.success:
-            raise ValueError(
-                f"Semantic feature extraction returned invalid payload for category={category}"
+            log.warning(
+                "Feature extraction parse failed for category=%s (skipping): %s",
+                category,
+                result.error,
             )
-
+            return
         response = result.value
 
         for cmd in response.commands:
@@ -269,9 +271,12 @@ class SemanticIngestionWorker:
             fallback=FeatureConsolidationResponse(),
         )
         if not result.success:
-            raise ValueError(
-                f"Semantic feature consolidation returned invalid payload for category={category}"
+            log.warning(
+                "Feature consolidation parse failed for category=%s (skipping): %s",
+                category,
+                result.error,
             )
+            return
         response = result.value
         if response.consolidation_decision is not FeatureConsolidationDecision.CONSOLIDATE:
             return

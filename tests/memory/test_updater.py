@@ -42,9 +42,10 @@ def test_extract_insight_returns_text_when_decision_extract(
     assert text == "Prefers explicit reasoning over anecdotes."
 
 
-def test_extract_insight_raises_on_invalid_payload(
+def test_extract_insight_returns_empty_on_invalid_payload(
     mock_llm_call: Callable[[dict[str, dict[str, object]]], None],
 ) -> None:
+    """LLM parse failure degrades gracefully — returns empty string, no exception."""
     mock_llm_call({})
-    with pytest.raises(ValueError, match="invalid decision payload"):
-        extract_insight(_ess(), "user text", "agent text")
+    result = extract_insight(_ess(), "user text", "agent text")
+    assert result == ""

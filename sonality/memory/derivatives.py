@@ -11,7 +11,7 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, field_validator, model_validator
 
 from ..llm.caller import llm_call
 from ..llm.prompts import CHUNKING_PROMPT
@@ -31,6 +31,18 @@ class ChunkItem(BaseModel):
     text: str
     key_concept: str
     importance: ChunkImportance = ChunkImportance.MEDIUM
+
+    @field_validator("importance", mode="before")
+    @classmethod
+    def coerce_importance(cls, v: object) -> object:
+        """Accept placeholder patterns ('...', 'high/medium/low') → MEDIUM fallback."""
+        if not isinstance(v, str):
+            return v
+        # Take first slash-separated option, then try to match enum
+        candidate = v.split("/")[0].strip().lower()
+        if candidate in ("", "...", "none"):
+            return ChunkImportance.MEDIUM
+        return candidate
 
 
 class ChunkingResponse(BaseModel):

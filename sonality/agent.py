@@ -261,7 +261,7 @@ class SonalityAgent:
     def _run_async[T](self, coro: Coroutine[object, object, T]) -> T:
         """Run an async coroutine from sync context via the background event loop."""
         future: Future[T] = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=120)
+        return future.result(timeout=config.ASYNC_TIMEOUT)
 
     async def _init_new_architecture(self) -> RuntimeComponents:
         """Initialize Neo4j + pgvector + embedding components."""
@@ -417,6 +417,13 @@ class SonalityAgent:
         stm_context = self._stm.get_recent_context()
         decision = self._query_router.route(user_message, context=stm_context)
 
+        log.info(
+            "Query routing: category=%s n_results=%d temporal=%s semantic=%s",
+            decision.category,
+            decision.n_results,
+            decision.temporal_expansion,
+            decision.semantic_memory,
+        )
         if decision.category == QueryCategory.NONE:
             return []
 

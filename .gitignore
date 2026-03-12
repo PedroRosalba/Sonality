@@ -20,6 +20,9 @@ uv.lock
 data/sponge.json
 data/sponge_history/
 data/chromadb/
+data/teaching_bench/
+data/*.log
+data/*.jsonl
 
 # Environment
 .env
