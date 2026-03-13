@@ -126,8 +126,8 @@ async def assess_belief_evidence(
         edge_type = EdgeType.CONTRADICTS_BELIEF
         _append_unique_uid(meta.contradicting_episode_uids, episode_uid)
         meta.last_challenged_at = sponge.interaction_count
-
-    meta.uncertainty = response.new_uncertainty
+    # Uncertainty is applied during update_opinion (via staged updates) to keep
+    # the Bayesian floor logic in a single place.
 
     # Create graph edge for provenance
     try:

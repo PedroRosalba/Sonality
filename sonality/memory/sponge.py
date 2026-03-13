@@ -75,6 +75,7 @@ class StagedOpinionUpdate(BaseModel):
     staged_at: int
     due_interaction: int
     provenance: str = ""
+    new_uncertainty: float = -1.0  # LLM-assessed uncertainty; -1.0 = not set
 
 
 class SpongeState(BaseModel):
@@ -116,6 +117,7 @@ class SpongeState(BaseModel):
         magnitude: float,
         provenance: str = "",
         evidence_increment: int = 1,
+        new_uncertainty: float = -1.0,
     ) -> None:
         """Apply a bounded signed opinion update and refresh belief metadata.
 
@@ -130,18 +132,26 @@ class SpongeState(BaseModel):
         signed = direction * magnitude
         if meta is None:
             evidence_count = max(1, evidence_increment)
-            initial_conf = 0.2
+            initial_uncertainty = 0.80  # 1.0 - initial_conf (0.2)
+            # Bayesian floor at creation: multiple staged updates reduce uncertainty immediately.
+            if evidence_count >= 3:
+                initial_uncertainty = min(initial_uncertainty, 0.30)
+            elif evidence_count >= 2:
+                initial_uncertainty = min(initial_uncertainty, 0.50)
             self.belief_meta[topic] = BeliefMeta(
-                confidence=initial_conf,
+                confidence=max(0.0, min(1.0, 1.0 - initial_uncertainty)),
                 evidence_count=evidence_count,
                 last_reinforced=self.interaction_count,
                 provenance=provenance,
                 recent_updates=[signed],
-                uncertainty=1.0 - initial_conf,
+                uncertainty=initial_uncertainty,
             )
         else:
             meta.evidence_count += max(1, evidence_increment)
             meta.last_reinforced = self.interaction_count
+            # Apply LLM-assessed uncertainty if provided (from belief provenance assessment).
+            if 0.0 <= new_uncertainty <= 1.0:
+                meta.uncertainty = new_uncertainty
             # Bayesian floor: uncertainty cannot stay at maximum as evidence accumulates.
             # Uses evidence_count as proxy; prevents LLM returning new_uncertainty=1.0 forever.
             if meta.evidence_count >= 3:
@@ -171,11 +181,14 @@ class SpongeState(BaseModel):
         magnitude: float,
         cooling_period: int,
         provenance: str = "",
+        new_uncertainty: float = -1.0,
     ) -> int:
         """Queue an opinion update and return the interaction when it matures.
 
         Staging isolates immediate model response from durable worldview changes;
         updates are committed only after `cooling_period` interactions.
+        new_uncertainty carries the LLM-assessed uncertainty for this evidence;
+        -1.0 means not set (no LLM assessment available).
         """
         signed = direction * magnitude
         if abs(signed) < 1e-9:
@@ -188,6 +201,7 @@ class SpongeState(BaseModel):
                 staged_at=self.interaction_count,
                 due_interaction=due,
                 provenance=provenance,
+                new_uncertainty=new_uncertainty,
             )
         )
         return due
@@ -226,12 +240,20 @@ class SpongeState(BaseModel):
             magnitude = abs(net)
             evidence_increment = len(updates)
             provenance = updates[-1].provenance
+            # Apply the LLM-assessed uncertainty from the most recent staged update.
+            # Uses the minimum uncertainty (most confident) among consistent-direction updates.
+            valid_uncertainties = [
+                u.new_uncertainty for u in updates
+                if u.new_uncertainty >= 0.0
+                and (u.signed_magnitude * net >= 0)  # same direction as net
+            ]
             self.update_opinion(
                 topic=topic,
                 direction=direction,
                 magnitude=magnitude,
                 provenance=provenance,
                 evidence_increment=evidence_increment,
+                new_uncertainty=min(valid_uncertainties) if valid_uncertainties else -1.0,
             )
             applied.append(f"{topic}:{net:+.4f} ({evidence_increment} staged)")
         return applied

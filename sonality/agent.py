@@ -883,6 +883,7 @@ class SonalityAgent:
         magnitude: float,
         provenance: str,
         episode_uid: str = "",
+        new_uncertainty: float = -1.0,
     ) -> None:
         """Stage one topic update and emit a consistent audit event."""
         if magnitude <= 0.0:
@@ -893,6 +894,7 @@ class SonalityAgent:
             magnitude=magnitude,
             cooling_period=config.OPINION_COOLING_PERIOD,
             provenance=provenance,
+            new_uncertainty=new_uncertainty,
         )
         event: dict[str, object] = {
             "event": "opinion_staged",
@@ -958,6 +960,7 @@ class SonalityAgent:
                 magnitude=effective_mag,
                 provenance=f"{update.reasoning[:120]} (ep={episode_uid[:8]})",
                 episode_uid=episode_uid,
+                new_uncertainty=update.new_uncertainty,
             )
             if update.update_magnitude is UpdateMagnitude.MAJOR:
                 self.sponge.record_shift(
@@ -1466,6 +1469,7 @@ class SonalityAgent:
         ]
         if ess.topics:
             parts.append(f"topics={list(ess.topics)}")
+        parts.append(f"beliefs={len(self.sponge.opinion_vectors)}")
         parts.append(f"v{self.sponge.version}")
         if ess.default_severity != "none":
             parts.append(f"ESS_FALLBACK={ess.default_severity}({list(ess.defaulted_fields)})")
