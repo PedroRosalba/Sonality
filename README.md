@@ -412,10 +412,13 @@ sonality/
 │           ├── reranker.py     LLM listwise episode reranker
 │           └── split.py        Multi-entity query decomposition
 ├── tests/                      Unit + integration tests (non-live by default)
-│   ├── test_agent_health.py    Live behavioral health suite (S1–S7): episode storage,
-│   │                           ESS gating, memory retrieval, anti-sycophancy, personality
-│   │                           accumulation, belief magnitude bounds, 15-interaction
-│   │                           extended evolution + long-range memory recall
+│   ├── test_agent_health.py    Live behavioral health suite (S1–S7, 25 tests):
+│   │                           S1 clean start, S2 episode storage, S3 ESS gating,
+│   │                           S4 memory retrieval, S5 anti-sycophancy, S6 personality
+│   │                           accumulation + belief magnitude bounds, S7 extended
+│   │                           16-interaction evolution: long-range memory recall,
+│   │                           contradiction handling, feature persistence across
+│   │                           topic shifts, no-unjustified-delete guard
 │   └── test_live_graduated.py  Live infrastructure tests (L0–L3x): connectivity, JSON
 │                               parsing per schema, memory primitives, store+recall
 ├── benches/                    Evaluation/benchmark suites (pytest, opt-in)
