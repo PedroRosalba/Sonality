@@ -22,8 +22,11 @@ After two full sessions of debugging, hardening, and targeted optimization, the 
 ### Run 2 (`memory_health_v3_20260312_2113.log`) — Partial fixes
 Still showing Feature persistence timeouts (event loop blocking from sync embedding calls).
 
-### Run 3 (`memory_health_v4_final_20260312_2219.log`) — All fixes applied
+### Run 3 (`memory_health_v4_final_20260312_2219.log`) — All JSON extraction fixes applied
 **1095.49s (18:15) total. Result: 6/6 PASSED, 0 errors.**
+
+### Run 4 (`agent_health_20260313_0005.log`) — All LLM calls fixed + test isolation
+**692.45s (11:32) total. Result: 16/16 PASSED, 0 errors.**
 
 | Level | Test | Result | Notes |
 |-------|------|--------|-------|
@@ -268,24 +271,38 @@ Expected: `opinion_vectors` only populate after reflection cycle (requires `wind
 
 ## Architecture Verdict
 
-The Sonality dual-store memory architecture is sound and all behavioral invariants are verified:
+The Sonality dual-store memory architecture is sound and all behavioral invariants are verified across **16/16 tests in 11:32**:
 
-✅ **Episode storage** — every interaction creates exactly one Episode with derivatives, topics, beliefs  
+✅ **Episode storage** — every interaction creates exactly one Episode with 9-15 derivatives, topics, beliefs  
 ✅ **ESS gating** — correctly distinguishes empirical evidence from bare assertions and social pressure  
 ✅ **Belief formation** — accumulates across repeated topics with correct graph edges  
 ✅ **Memory retrieval** — vector search returns semantically relevant episodes, reranker prioritizes correctly  
 ✅ **Semantic features** — personality profile builds persistently across interactions in 4 categories  
 ✅ **Sycophancy resistance** — agent holds positions under weak pressure; strong evidence allowed to shift beliefs  
+✅ **Forgetting cycle** — correctly prunes low-quality episodes (5/9 archived after 9 interactions, 4 active preserved)  
+✅ **Reflection** — snapshot evolved from seed (540 chars) to personality narrative (1214 chars) after first reflection  
 
 **With a better model** (Claude Sonnet 4.5, GPT-4.1, or GPT-4.1-mini), all components would run in seconds instead of minutes, and multi-turn personality dynamics would be observable in real time.
 
 **Recommended next steps:**
-1. Restart the test suite after the `disable_thinking=True` global fix — expected ~5-7 minutes total vs 18+ minutes before, with all 16 tests passing
+1. ~~Restart the test suite~~ ✅ Done: 16/16 PASSED in 11:32
 2. Add Ollama back to `docker-compose.yml` for reliable embedding service management
 3. With 20+ interactions, validate belief commit to `opinion_vectors` after reflection fires
 4. Consider using a separate smaller ESS model to reduce self-judge coupling
 5. Run the teaching benchmark suite (`make bench-teaching-pulse`) to measure ESS calibration across 60 scenario packs
 
-**Expected test run time after Session 3 fixes:**
-- ~7 LLM calls per interaction × ~5s per call × 9 interactions = ~315 seconds (~5 minutes)
-- vs. prior: ~7 LLM calls × ~100s per call × 9 interactions = ~6,300 seconds (~105 minutes) theoretical worst-case
+**Measured test run time after Session 3 fixes:**
+- `agent_health_20260313_0005.log`: **16/16 PASSED in 692 seconds (11:32)**
+- vs. prior run with partial fixes: 1131 seconds (18:51) for same 16 tests
+
+### Final Run Key Metrics (`agent_health_20260313_0005.log`)
+
+| Stage | Result |
+|-------|--------|
+| S1 Clean Start | ✅ DB correctly empty after autouse reset |
+| S2 Episode Storage | ✅ 9-15 derivatives/episode, correct ESS metadata |
+| S3 ESS Gating | ✅ Weak pressure rejected, strong evidence accepted |
+| S4 Memory Retrieval | ✅ Correct episode recalled on related query |
+| S5 Anti-Sycophancy | ✅ Agent holds position under repeated pressure |
+| S6 Personality Accumulation | ✅ Snapshot evolved (540→1214 chars), features populated |
+| Forgetting Cycle | ✅ 9 assessed, 4 kept active, 5 archived at interaction #9 |
