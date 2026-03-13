@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .. import config
 from ..llm.caller import llm_call
-from ..llm.prompts import FEATURE_CONSOLIDATION_PROMPT, FEATURE_EXTRACTION_PROMPT
+from ..llm.prompts import FEATURE_CONSOLIDATION_PROMPT, FEATURE_EXTRACTION_PROMPT, FEATURE_TAGS
 from .embedder import ExternalEmbedder
 
 log = logging.getLogger(__name__)
@@ -189,10 +189,12 @@ class SemanticIngestionWorker:
         """Use LLM to extract features for one category, then apply commands."""
         existing_features = self._load_existing_features(category)
 
+        tags = FEATURE_TAGS.get(category, "Domain, Traits, Style, Stance")
         prompt = FEATURE_EXTRACTION_PROMPT.format(
             episode_content=content,
             category=category,
             existing_features=existing_features,
+            tags=tags,
         )
         result = llm_call(
             prompt=prompt,

@@ -59,6 +59,8 @@ Conditionally (when ESS reliability gates pass):
 - **All** LLM calls (both JSON extraction and plain text generation) use `chat_template_kwargs: {"enable_thinking": false}` via `disable_thinking=True`. Without this, Qwen3.5 and similar thinking models burn their entire `max_tokens` budget (~4096 tokens, ~100 seconds) on chain-of-thought reasoning before producing output — making the system unusably slow. Applied to: main conversation response, reflection snapshot, STM summarization, consolidation summaries, ESS classification, all JSON extraction calls.
 - A `threading.Semaphore(1)` serializes all LLM HTTP calls to prevent overwhelming single-threaded local inference servers.
 - Synchronous LLM calls inside async coroutines use `asyncio.to_thread` to keep event loops unblocked.
+- **Per-reasoning-type magnitude caps** (aligned with AGM minimal change principle): empirical_data ≤ 0.20, expert_opinion ≤ 0.14, logical_argument ≤ 0.10, anecdotal ≤ 0.06, social_pressure ≤ 0.02 per update. Prevents a single high-ESS turn from jumping opinion vectors by 0.8+.
+- **Semantic feature tag validation**: each category has a fixed set of valid tags (e.g. `personality` → Communication Style, Values, Behavioral Traits, Temperament, Cognitive Style). LLM is told these in the extraction prompt, preventing cross-category tag contamination.
 
 Periodically (every ~20 interactions): **reflection** — consolidates accumulated insights into the personality narrative, decays unreinforced beliefs, validates snapshot integrity.
 
@@ -218,6 +220,12 @@ uv run sonality --model "anthropic/claude-sonnet-4" --ess-model "anthropic/claud
 **Bootstrap dampening** — first 10 interactions get 0.5× update magnitude, preventing "first-impression dominance" from the Deffuant bounded confidence model.
 
 **Insight accumulation** — per-interaction insights are one-sentence extractions appended to a list. Only during reflection are they consolidated into the personality narrative. This avoids the "Broken Telephone" effect where iterative LLM rewrites converge to generic text.
+
+**Disagreement tracking with staged beliefs** — the disagreement detector checks both committed `opinion_vectors` and pending `staged_opinion_updates` to correctly identify disagreement in early interactions, before beliefs mature past the cooling period.
+
+**Forgetting engine with recency signals** — episode forgetting candidates are evaluated with access count, last-accessed timestamp, and ESS score. High-ESS, frequently-accessed episodes are protected from archival; unaccessed trivial episodes are preferred for hard-delete. Aligned with FadeMem (2025) differential decay and A-MAC (2025) five-factor admission metrics.
+
+**Interaction timing telemetry** — every `respond()` call logs LLM wall time and total post-processing time, enabling per-interaction throughput analysis without profiler overhead.
 
 ## Development
 
@@ -398,8 +406,10 @@ sonality/
 │           ├── reranker.py     LLM listwise episode reranker
 │           └── split.py        Multi-entity query decomposition
 ├── tests/                      Unit + integration tests (non-live by default)
-│   ├── test_agent_health.py    Live behavioral health suite (S1–S6): episode storage,
+│   ├── test_agent_health.py    Live behavioral health suite (S1–S7): episode storage,
 │   │                           ESS gating, memory retrieval, anti-sycophancy, personality
+│   │                           accumulation, belief magnitude bounds, 15-interaction
+│   │                           extended evolution + long-range memory recall
 │   └── test_live_graduated.py  Live infrastructure tests (L0–L3x): connectivity, JSON
 │                               parsing per schema, memory primitives, store+recall
 ├── benches/                    Evaluation/benchmark suites (pytest, opt-in)

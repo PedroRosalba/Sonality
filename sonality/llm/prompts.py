@@ -216,15 +216,18 @@ Agent's Current Identity Snapshot:
 {snapshot_excerpt}
 
 For each candidate, decide:
-- KEEP: Important, unique, foundational
-- ARCHIVE: Low importance but might be useful later
-- FORGET: Redundant, trivial, or superseded
+- KEEP: Important, unique, foundational, or frequently accessed
+- ARCHIVE: Low importance but might be useful later; low access count
+- FORGET: Redundant, trivial, superseded, or never accessed after storage
+
+Signals that favor KEEP: high ESS, high access count, recent last_accessed, unique topic.
+Signals that favor FORGET: ESS < 0.1, access count = 0, superseded by another episode, trivial content.
 
 Respond with ONLY a JSON object. Example:
 {{
   "decisions": [
-    {{"uid": "ep-abc123", "action": "KEEP", "reason": "Foundational belief formation event."}},
-    {{"uid": "ep-def456", "action": "FORGET", "reason": "Redundant with more recent episode."}}
+    {{"uid": "ep-abc123", "action": "KEEP", "reason": "Foundational belief formation, accessed 3 times."}},
+    {{"uid": "ep-def456", "action": "FORGET", "reason": "Redundant with ep-abc123; ESS 0.05, never accessed."}}
   ]
 }}
 
@@ -365,15 +368,23 @@ Respond with ONLY a JSON object. Example:
 overall_health must be: healthy, concerning, or unhealthy.
 All metric scores are floats from 0.0 to 1.0."""
 
+# Valid tags per category — restricts LLM from cross-pollinating category names.
+FEATURE_TAGS: Final[dict[str, str]] = {
+    "personality": "Communication Style, Values, Behavioral Traits, Temperament, Cognitive Style",
+    "preferences": "Interests, Aversions, Decision Framework, Domains, Styles",
+    "knowledge": "Domain, Technical Skills, Scientific Fields, Academic Topics, Methodology",
+    "relationships": "Interpersonal Style, Social Dynamics, Collaborative Patterns, Stance",
+}
+
 # --- Semantic Feature Extraction ---
 FEATURE_EXTRACTION_PROMPT: Final = """\
-Analyze this conversation and extract semantic features about the agent's personality,
-preferences, knowledge, or relationships.
+Analyze this conversation and extract semantic features about the agent's {category}.
 
 Episode:
 {episode_content}
 
-Category to extract for: {category}
+Category: {category}
+Valid tags for this category (ONLY use these, no other tags allowed): {tags}
 
 Existing features in this category:
 {existing_features}
@@ -386,7 +397,8 @@ Your response must be ONLY this JSON object with actual values filled in (no {{"
   ]
 }}
 If no features should be added/updated/deleted, return: {{"commands": []}}
-command must be add, update, or delete. confidence is a float from 0.0 to 1.0."""
+command must be add, update, or delete. confidence is a float from 0.0 to 1.0.
+IMPORTANT: tag must be one of the valid tags listed above."""
 
 # --- Semantic Feature Consolidation ---
 FEATURE_CONSOLIDATION_PROMPT: Final = """\

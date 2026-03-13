@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import threading
+import time
 from collections.abc import Coroutine
 from concurrent.futures import Future
 from dataclasses import asdict, dataclass
@@ -75,6 +76,18 @@ UTILITY_SIGNAL_DELTA: Final[dict[str, float]] = {
     "explicit_ref": 0.20,
     "positive_outcome": 0.15,
     "noise": -0.05,
+}
+
+# Per-evidence-type maximum belief shift per update (aligned with AGM minimal change).
+# Prevents a single high-ESS turn from jumping opinions by 0.8+.
+REASONING_TYPE_MAX_MAG: Final[dict[str, float]] = {
+    "empirical_data": 0.20,
+    "expert_opinion": 0.14,
+    "logical_argument": 0.10,
+    "anecdotal": 0.06,
+    "emotional_appeal": 0.03,
+    "social_pressure": 0.02,
+    "no_argument": 0.0,
 }
 
 
@@ -319,6 +332,7 @@ class SonalityAgent:
 
         This is the canonical orchestration entrypoint used by the CLI.
         """
+        _t0 = time.perf_counter()
         log.info("=== Interaction #%d ===", self.sponge.interaction_count + 1)
         log.info("User: %.120s", user_message)
 
@@ -385,7 +399,14 @@ class SonalityAgent:
         # Add assistant response to STM
         self._stm.add_message("assistant", assistant_msg)
 
+        log.info("Agent: %.200s", assistant_msg)
+        log.debug("Agent (full): %s", assistant_msg)
+        _llm_elapsed = time.perf_counter() - _t0
+        log.info("Interaction #%d LLM: %.1fs", self.sponge.interaction_count + 1, _llm_elapsed)
+
         self._post_process(user_message, assistant_msg)
+        _total_elapsed = time.perf_counter() - _t0
+        log.info("Interaction #%d total: %.1fs", self.sponge.interaction_count, _total_elapsed)
         last_ess = self.last_ess
         self.last_usage = ModelUsage(
             response_calls=1,
@@ -711,13 +732,23 @@ class SonalityAgent:
             return ""
 
     def _detect_disagreement(self, user_message: str, ess: ESSResult) -> bool:
-        """Structural disagreement between current user evidence and held beliefs."""
+        """Structural disagreement between current user evidence and held beliefs.
+
+        Also checks staged (uncommitted) opinion updates so early-interaction
+        disagreement is correctly tracked before beliefs mature.
+        """
         sign = ess.opinion_direction.sign
         if sign == 0.0:
             return False
+        # Build effective position map: committed + net staged
+        staged_net: dict[str, float] = {}
+        for s in self.sponge.staged_opinion_updates:
+            staged_net[s.topic] = staged_net.get(s.topic, 0.0) + s.signed_magnitude
         for topic in ess.topics:
-            pos = self.sponge.opinion_vectors.get(topic, 0.0)
-            if abs(pos) <= 0.1:
+            committed = self.sponge.opinion_vectors.get(topic, 0.0)
+            staged = staged_net.get(topic, 0.0)
+            pos = committed + staged
+            if abs(pos) <= 0.05:
                 continue
             prompt = DISAGREEMENT_DETECTION_PROMPT.format(
                 user_message=user_message[:500],
@@ -904,7 +935,13 @@ class SonalityAgent:
                 self._apply_llm_contraction(topic, update.evidence_strength)
 
             confidence = self._topic_revision_confidence(topic, direction)
-            effective_mag = max(0.0, min(1.0, update.evidence_strength)) / (confidence + 1.0)
+            raw_mag = max(0.0, min(1.0, update.evidence_strength)) / (confidence + 1.0)
+            max_mag = REASONING_TYPE_MAX_MAG.get(str(ess.reasoning_type), 0.10)
+            effective_mag = min(raw_mag, max_mag)
+            log.debug(
+                "Belief magnitude %s: raw=%.3f max=%.3f (type=%s) → effective=%.3f",
+                topic, raw_mag, max_mag, ess.reasoning_type, effective_mag,
+            )
             self._stage_topic_opinion_update(
                 topic=topic,
                 direction=direction,

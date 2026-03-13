@@ -119,6 +119,7 @@ class ForgettingEngine:
             f"Content: {ep.content[:200]}\n"
             f"Topics: {', '.join(ep.topics)}\n"
             f"ESS: {ep.ess_score:.2f} | Access count: {ep.access_count} | "
+            f"Last accessed: {ep.last_accessed or 'never'} | "
             f"Consolidation: L{ep.consolidation_level}"
             for ep in candidates
         )
