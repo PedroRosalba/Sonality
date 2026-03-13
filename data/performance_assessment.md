@@ -373,3 +373,41 @@ The issues encountered were:
 3. **Uncertainty calibration** (Sessions 6-7): LLM uncertainty threading through staged updates, Bayesian floor at belief creation
 
 **With a capable model** (Claude 3.7 Sonnet, GPT-4.1), all these behaviors would have been nearly instant to validate and the hardening work would have been minimal. The 7 sessions of work hardened the system against a far more challenging operating environment than any production deployment would face.
+
+---
+
+## Research-Based Future Improvements (Web Research 2025-2026)
+
+Based on the latest academic research on LLM agent memory and personality consistency:
+
+### Memory Architecture Enhancements
+
+1. **Agentic Memory (AgeMem, arXiv 2601.01885)**: Expose memory operations as tool-based actions with RL training. Sonality currently uses fixed memory pipelines; RL-driven memory policy could let the agent autonomously decide what to store/discard based on learned value.
+
+2. **HiMem Hierarchical Memory (arXiv 2601.06377)**: Adds "Note Memory" layer above Episode Memory for stable knowledge extraction. Sonality has episodic + semantic dual-store; adding an explicit "extracted knowledge" tier with conflict-aware reconsolidation could improve long-horizon stability.
+
+3. **Continuum Memory Architecture (arXiv 2601.09913)**: Temporal chaining and associative routing beyond flat retrieval. Sonality's hybrid BM25+vector is a step toward this; adding explicit temporal chaining (episode→successor links) would improve narrative coherence queries.
+
+4. **MEM1 Constant-Context (OpenReview)**: RL-trained memory consolidation that maintains near-constant context size. This directly maps to Sonality's STM consolidation; applying RL to optimize the summarization policy could reduce context load 3-4×.
+
+### Personality Consistency Findings
+
+5. **Persona Drift (OpenReview 2025)**: LLMs exhibit 3 types of consistency failures: prompt-to-line, line-to-line, and Q&A consistency. Multi-turn RL reduces inconsistency by >55%. Sonality's snapshot evolution + ESS gating partially addresses this; explicit consistency validation during reflection would strengthen it.
+
+6. **Personality Illusion Effect**: Self-reported traits from RLHF don't reliably predict actual behavior (OpenReview 2025). Sonality should monitor behavioral signature (disagreement_rate, etc.) vs. snapshot claims and flag divergences.
+
+7. **Bayesian Belief Update Incoherence**: LLMs show ~30% average difference from correct Bayesian updates (OpenReview 2025). Sonality's Bayesian confidence floor partially mitigates; adding explicit prior/posterior logging and calibration checks would quantify drift.
+
+8. **Dynamic Persona Refinement (DPRF, arXiv 2510.14205)**: Iteratively identify cognitive divergences and refine persona. Sonality's reflection cycle is conceptually similar; adding explicit "divergence detection" between stated beliefs and behavioral patterns during reflection would strengthen persona coherence.
+
+### Concrete Implementation Priorities
+
+| Priority | Enhancement | Effort | Impact |
+|----------|-------------|--------|--------|
+| High | Temporal chaining in episode retrieval | Medium | Improves narrative queries |
+| High | Behavioral vs. snapshot divergence detector | Low | Catches persona drift early |
+| Medium | Note Memory tier for stable extracted knowledge | High | Better long-horizon stability |
+| Medium | RL-optimized STM summarization | High | 3-4× context reduction |
+| Low | Full Bayesian prior/posterior logging | Low | Quantifies calibration quality |
+
+These enhancements would move Sonality toward the state-of-the-art memory architectures described in 2025-2026 academic literature while building on the already-validated dual-store foundation.
