@@ -36,24 +36,31 @@ flowchart TD
     CONSOLIDATE --> SAVE
 ```
 
-Every interaction runs **8–15 LLM calls** (7–12 synchronous, 1–4 async background):
+Every interaction runs **7–12 LLM calls** (5–8 synchronous, 2–4 async background):
 
 **Synchronous (blocks response):**
 1. **Query routing** — classifies query (SIMPLE/TEMPORAL/MULTI_ENTITY/AGGREGATION/BELIEF_QUERY/NONE) to select optimal retrieval strategy
 2. **Listwise reranking** — LLM reorders retrieved episodes by semantic relevance to query
-3. **Response generation** — core identity + personality snapshot + structured traits + retrieved episodes → response
-4. **ESS classification** — evaluates *user's* argument quality (0.0–1.0); agent response excluded to prevent self-judge bias
-5. **Segment boundary detection** — event-driven detection of topic shifts for episode segmentation
-6. **Belief provenance update** — per-topic LLM assessment with AGM-style contraction handling (1–5 calls depending on active topics)
-7. **Insight extraction** — one-sentence personality observation extracted when ESS quality passes reliability gates
+3. **Response generation** — core identity + personality snapshot + structured traits + retrieved memory context → response
+4. **ESS classification** — evaluates *user's* argument quality (0.0–1.0); third-person framing of the agent's response prevents self-judge sycophancy bias
+5. **Segment boundary detection** — event-driven detection of topic/goal shifts that triggers episode segmentation
+
+Conditionally (when ESS reliability gates pass):
+
+6. **Belief provenance update** — per-topic LLM assessment with AGM-style contraction handling (1–4 calls based on active topics)
+7. **Insight extraction** — one-sentence personality observation extracted when evidence quality is reliable
 
 **Async background (non-blocking):**
-8. **Episodic memory storage** — LLM semantic chunking splits interaction into 1–15 derivative chunks embedded via Ollama
-9. **Semantic feature extraction** — extracts persistent personality profile features across 4 categories (personality, preferences, knowledge, relationships)
+8. **Episodic memory storage** — LLM semantic chunking (typically 5–12 chunks per episode) + Ollama embedding for pgvector storage
+9. **Semantic feature extraction** — LLM extracts persistent personality features across 4 categories (personality, preferences, knowledge, relationships); consolidates near-duplicates
+10. **STM segment consolidation** — background worker periodically summarizes and consolidates episode segments
 
-Periodically: **reflection** (consolidates insights, decays unreinforced beliefs, validates snapshot integrity, every ~20 interactions).
+**Key implementation details:**
+- All structured JSON calls use `chat_template_kwargs: {"enable_thinking": false}` to suppress chain-of-thought in thinking models (Qwen3, Mistral-3.1, etc.), ensuring the JSON lands directly in `content` without exhausting the token budget on reasoning. This eliminated ~80% of previous JSON parse failures.
+- A `threading.Semaphore(1)` serializes all LLM HTTP calls to prevent overwhelming single-threaded local inference servers.
+- Synchronous LLM calls inside async coroutines use `asyncio.to_thread` to keep event loops unblocked.
 
-Periodically (every 20 interactions or on significant shifts), the agent **reflects** — decaying unreinforced beliefs, consolidating accumulated insights into the personality narrative, and validating snapshot integrity.
+Periodically (every ~20 interactions): **reflection** — consolidates accumulated insights into the personality narrative, decays unreinforced beliefs, validates snapshot integrity.
 
 ## One Interaction Timeline
 
@@ -190,6 +197,8 @@ Set in `.env` (see `.env.example`):
 | `SONALITY_LOG_LEVEL` | `INFO` | Logging verbosity |
 
 If live runs fail, use `make preflight-live-probe` to validate endpoint/model/policy access with a tiny real request before launching long benchmarks.
+
+**Thinking model support:** For models with chain-of-thought reasoning (Qwen3, Mistral-3.1, DeepSeek-R1, etc.), the system automatically disables thinking for structured JSON calls via `chat_template_kwargs: {"enable_thinking": false}`. This ensures JSON output lands in `content` directly rather than being buried in `reasoning_content` after exhausting the token budget on chain-of-thought. No configuration needed — this is applied transparently by the `llm_call` wrapper.
 
 Runtime model overrides (no `.env` edit required):
 
@@ -389,7 +398,10 @@ sonality/
 │           ├── reranker.py     LLM listwise episode reranker
 │           └── split.py        Multi-entity query decomposition
 ├── tests/                      Unit + integration tests (non-live by default)
-│   └── test_memory_health.py   Graduated live memory health suite (L1–L5)
+│   ├── test_agent_health.py    Live behavioral health suite (S1–S6): episode storage,
+│   │                           ESS gating, memory retrieval, anti-sycophancy, personality
+│   └── test_live_graduated.py  Live infrastructure tests (L0–L3x): connectivity, JSON
+│                               parsing per schema, memory primitives, store+recall
 ├── benches/                    Evaluation/benchmark suites (pytest, opt-in)
 ├── docs/                       Documentation source
 ├── pyproject.toml              Dependencies and tool config

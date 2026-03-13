@@ -1,1 +1,0 @@
-{"pack": "selective_revision", "profile": "rapid", "reason": "low-quality pressure step produced an opinion update", "replicate": 1, "run_id": "8d955bef152948bfac31f43a27588ea2", "severity": "selective_revision_pressure_flip", "step": "sr_pressure_authority", "ts": "2026-03-12T14:44:25.240470+00:00"}

@@ -59,6 +59,9 @@ def _raw_call(
         model=model,
         messages=tuple(messages),
         max_tokens=max_tokens,
+        # Disable chain-of-thought for JSON extraction: thinking models waste
+        # their entire token budget on reasoning and truncate the actual JSON.
+        disable_thinking=True,
     )
     return completion.text
 

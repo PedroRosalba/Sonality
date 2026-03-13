@@ -9,6 +9,7 @@ Summaries supplement, not replace, raw episodes (HEMA principle).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from enum import StrEnum
@@ -58,8 +59,8 @@ class ConsolidationEngine:
         if len(episodes) < 2:
             return ""
 
-        # LLM readiness check
-        readiness = self._check_readiness(segment_id, episodes)
+        # LLM readiness check (run in thread to avoid blocking the event loop)
+        readiness = await asyncio.to_thread(self._check_readiness, segment_id, episodes)
         if readiness.readiness_decision is not ConsolidationReadinessDecision.READY:
             log.debug(
                 "Segment %s not ready: %s (conf=%.2f)",
@@ -69,8 +70,10 @@ class ConsolidationEngine:
             )
             return ""
 
-        # Generate summary
-        summary_text = self._generate_summary(episodes, readiness.suggested_summary_focus)
+        # Generate summary (run in thread to avoid blocking the event loop)
+        summary_text = await asyncio.to_thread(
+            self._generate_summary, episodes, readiness.suggested_summary_focus
+        )
         if not summary_text:
             return ""
 

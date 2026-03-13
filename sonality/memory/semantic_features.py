@@ -19,8 +19,11 @@ from typing import TypeVar
 _T = TypeVar("_T")
 
 from psycopg_pool import AsyncConnectionPool
-from pydantic import BaseModel, Field, model_validator
+import re
 
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from .. import config
 from ..llm.caller import llm_call
 from ..llm.prompts import FEATURE_CONSOLIDATION_PROMPT, FEATURE_EXTRACTION_PROMPT
 from .embedder import ExternalEmbedder
@@ -48,6 +51,14 @@ class FeatureCommand(BaseModel):
     value: str = ""
     confidence: float = 0.5
     reason: str = ""
+
+    @field_validator("value", mode="before")
+    @classmethod
+    def strip_inline_conf(cls, v: object) -> object:
+        """Strip trailing '(conf=X.XX)' that LLMs sometimes append to value strings."""
+        if isinstance(v, str):
+            return re.sub(r"\s*\(conf=[\d.]+\)\s*$", "", v).strip()
+        return v
 
 
 class FeatureExtractionResponse(BaseModel):
@@ -118,7 +129,7 @@ class SemanticIngestionWorker:
     def _run_async(self, coro: Coroutine[object, object, _T]) -> _T:
         """Submit a coroutine to the worker's own dedicated event loop."""
         future = asyncio.run_coroutine_threadsafe(coro, self._loop)
-        return future.result(timeout=60)
+        return future.result(timeout=config.ASYNC_TIMEOUT)
 
     def start(self) -> None:
         """Start the background processing thread and its dedicated event loop."""
@@ -424,7 +435,10 @@ class SemanticIngestionWorker:
         feature_uid = self._feature_uid(category, cmd.tag, cmd.feature)
         embedding: list[float] = []
         if cmd.command in {FeatureCommandType.ADD, FeatureCommandType.UPDATE}:
-            embedding = self._embedder.embed_query(cmd.value or cmd.feature)
+            # Run synchronous HTTP embedding in a thread so the event loop stays free
+            embedding = await asyncio.to_thread(
+                self._embedder.embed_query, cmd.value or cmd.feature
+            )
 
         async with self._pg_pool.connection() as conn, conn.cursor() as cur:
             if cmd.command in {FeatureCommandType.ADD, FeatureCommandType.UPDATE}:

@@ -261,7 +261,7 @@ Output ONLY a JSON object (fill in YOUR values — do NOT copy this example):
 
 direction: float -1.0 to +1.0 (negative = contradicts belief, positive = supports).
 evidence_strength and new_uncertainty: floats 0.0 to 1.0.
-update_magnitude: MAJOR or MINOR.
+update_magnitude: MAJOR (large shift ≥0.3), MINOR (small shift <0.3), or NONE (no shift).
 contraction_action: CONTRACT or NONE."""
 
 # --- Structural Disagreement Detection ---
@@ -390,18 +390,19 @@ command must be add, update, or delete. confidence is a float from 0.0 to 1.0.""
 
 # --- Semantic Feature Consolidation ---
 FEATURE_CONSOLIDATION_PROMPT: Final = """\
-Review semantic features in the {category} category and decide if any are redundant enough to merge.
+You are reviewing semantic features in the "{category}" category to find redundant pairs to merge.
 
-Features:
+Features to review:
 {features}
 
-Consolidation means merging features that describe the same trait with different wording.
-Do NOT merge features that describe distinct behaviors or facts.
+Merge only features that describe the exact same trait with different wording. Do NOT merge distinct behaviors.
 
-Output ONLY a JSON object (do NOT output the category name or any prose):
-{{"consolidation_decision": "SKIP", "reasoning": "All features are distinct.", "actions": []}}
+Your response must be a single JSON object with this exact structure.
 
-If merging is needed, use CONSOLIDATE and list actions:
-{{"consolidation_decision": "CONSOLIDATE", "reasoning": "Two features describe the same style.", "actions": [{{"source_uid": "feat-abc", "target_uid": "feat-xyz", "canonical_tag": "Communication Style", "canonical_feature": "humor_style", "canonical_value": "dry wit", "reason": "duplicate"}}]}}
+No-merge example:
+{{"consolidation_decision": "SKIP", "reasoning": "Features are distinct.", "actions": []}}
 
-consolidation_decision must be CONSOLIDATE or SKIP."""
+Merge example:
+{{"consolidation_decision": "CONSOLIDATE", "reasoning": "feat-abc and feat-xyz both describe dry humor.", "actions": [{{"source_uid": "feat-abc", "target_uid": "feat-xyz", "canonical_tag": "Communication Style", "canonical_feature": "humor_style", "canonical_value": "dry wit", "reason": "duplicate"}}]}}
+
+Respond with the JSON object now:"""

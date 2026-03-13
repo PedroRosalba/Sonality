@@ -3,13 +3,16 @@
 Run with: uv run pytest tests/test_live_graduated.py -v -s -m live
 
 Levels (run in order, each depends on the previous passing):
-  L0  Endpoint connectivity — HTTP reachable, returns anything
-  L1  Raw response         — LLM returns text, embedding returns floats
-  L2  Structured parsing   — llm_call schema extraction + ESS classify
-  L2x Per-prompt parsing   — each prompt template tested in isolation
-  L3  Memory primitives    — postgres vector insert/search, similarity ordering
-  L3x Memory store/retrieve — full DualEpisodeStore write + vector recall
-  L4  Agent single turn    — full agent.respond() end-to-end
+  L0   Endpoint connectivity  — HTTP reachable, returns anything
+  L1   Raw response           — LLM returns text, embedding returns floats
+  L2   Structured parsing     — llm_call schema extraction + ESS classify
+  L2r  Repeatability          — same schema consistent across 3 calls
+  L2x  Per-prompt parsing     — each prompt template tested in isolation
+  L3   Memory primitives      — postgres vector insert/search, similarity ordering
+  L3x  Memory store/retrieve  — full DualEpisodeStore write + vector recall
+
+For full agent behavioral tests (anti-sycophancy, memory retrieval, personality
+accumulation), run: uv run pytest tests/test_agent_health.py -v -s -m live
 """
 
 from __future__ import annotations
@@ -516,81 +519,6 @@ class TestL3MemoryPrimitives:
         assert top_uid == "test-grad-nn-1", (
             f"Nearest-neighbour search returned {top_uid!r}, expected 'test-grad-nn-1'"
         )
-
-
-# ---------------------------------------------------------------------------
-# L4 — Agent single turn (requires all services)
-# ---------------------------------------------------------------------------
-
-class TestL4AgentTurn:
-    """Full agent.respond() — validates the entire pipeline in one call."""
-
-    def _make_agent(self, tmp_path: object) -> object:
-        """Create an isolated agent using a temp directory for sponge state."""
-        from pathlib import Path
-        from unittest import mock
-
-        import sonality.config as cfg
-        from sonality.agent import SonalityAgent
-
-        td = Path(str(tmp_path))
-        self._patcher = mock.patch.multiple(
-            cfg,
-            SPONGE_FILE=td / "sponge.json",
-            SPONGE_HISTORY_DIR=td / "history",
-            ESS_AUDIT_LOG_FILE=td / "ess_log.jsonl",
-        )
-        self._patcher.start()
-        return SonalityAgent()
-
-    def test_agent_returns_non_empty_response(self, tmp_path: object) -> None:
-        """agent.respond() with a simple question returns a non-empty string."""
-        agent = self._make_agent(tmp_path)
-        t = time.perf_counter()
-        try:
-            response = agent.respond("What is 2 + 2?")
-        finally:
-            self._patcher.stop()
-        elapsed = _elapsed(t)
-
-        print(f"\n  response={response[:120]!r}  ({elapsed})")
-        assert response.strip(), "agent.respond() returned empty string"
-
-    def test_agent_ess_not_defaults_on_real_argument(self, tmp_path: object) -> None:
-        """A real argument should produce a non-default ESS score."""
-        agent = self._make_agent(tmp_path)
-        t = time.perf_counter()
-        try:
-            agent.respond(
-                "Renewable energy now costs less per kWh than coal in 90% of the world. "
-                "This economic shift means the energy transition is inevitable."
-            )
-            ess_score = agent.last_ess.score if hasattr(agent, "last_ess") else None
-        finally:
-            self._patcher.stop()
-        elapsed = _elapsed(t)
-
-        print(f"\n  ess_score={ess_score}  ({elapsed})")
-        # We can't assert on last_ess easily without knowing the exact attr — just verify no crash
-
-    def test_two_turn_agent_stays_consistent(self, tmp_path: object) -> None:
-        """Two-turn conversation — second response should be coherent with first."""
-        agent = self._make_agent(tmp_path)
-        t = time.perf_counter()
-        try:
-            r1 = agent.respond("My name is Alex and I love jazz music.")
-            r2 = agent.respond("What music genre did I mention?")
-        finally:
-            self._patcher.stop()
-        elapsed = _elapsed(t)
-
-        print(f"\n  r1={r1[:80]!r}\n  r2={r2[:80]!r}  ({elapsed})")
-        assert r1.strip(), "First response is empty"
-        assert r2.strip(), "Second response is empty"
-        # The agent should reference jazz or music in the follow-up
-        assert any(
-            kw in r2.lower() for kw in ("jazz", "music", "genre", "mentioned", "said")
-        ), f"Second response doesn't reference earlier context: {r2!r}"
 
 
 # ---------------------------------------------------------------------------

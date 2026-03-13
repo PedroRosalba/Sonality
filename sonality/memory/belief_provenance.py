@@ -7,11 +7,12 @@ Links beliefs to supporting/contradicting episodes via graph edges.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from ..llm.caller import llm_call
 from ..llm.prompts import BELIEF_UPDATE_PROMPT
@@ -45,6 +46,14 @@ class BeliefUpdateResponse(BaseModel):
     reasoning: str = ""
     update_magnitude: UpdateMagnitude = UpdateMagnitude.MINOR
     contraction_action: ContractionAction = ContractionAction.NONE
+
+    @field_validator("update_magnitude", mode="before")
+    @classmethod
+    def coerce_magnitude(cls, v: object) -> object:
+        """Map MODERATE → MINOR and similar variants not in the enum."""
+        if isinstance(v, str) and v.upper() not in ("MAJOR", "MINOR", "NONE"):
+            return "MINOR"
+        return v
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,7 +100,8 @@ async def assess_belief_evidence(
         reasoning_type=reasoning_type,
         source_reliability=source_reliability,
     )
-    result = llm_call(
+    result = await asyncio.to_thread(
+        llm_call,
         prompt=prompt,
         response_model=BeliefUpdateResponse,
         fallback=BeliefUpdateResponse(direction=0.0, evidence_strength=0.0),

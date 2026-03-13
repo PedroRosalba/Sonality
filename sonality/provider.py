@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import threading
 import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -12,6 +13,11 @@ from urllib.request import Request, urlopen
 from . import config
 
 log = logging.getLogger(__name__)
+
+# Serialize all LLM HTTP calls. llama.cpp / single-GPU servers process one request
+# at a time; concurrent calls pile up in the queue and trigger cascading timeouts.
+# Embedding calls are excluded (different endpoint, much faster).
+_LLM_SEMAPHORE: threading.Semaphore = threading.Semaphore(1)
 
 _RETRYABLE_HTTP_STATUSES = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 _EMPTY_MAPPING: dict[str, object] = {}
@@ -284,6 +290,7 @@ def chat_completion(
     temperature: float = -1.0,
     tools: Sequence[Mapping[str, object]] = (),
     tool_choice: Mapping[str, object] = _EMPTY_MAPPING,
+    disable_thinking: bool = False,
 ) -> ChatResult:
     payload: dict[str, object] = {
         "model": model,
@@ -296,8 +303,13 @@ def chat_completion(
         payload["tools"] = [dict(tool) for tool in tools]
     if tool_choice:
         payload["tool_choice"] = dict(tool_choice)
+    if disable_thinking:
+        # Qwen3 and similar thinking models: suppress chain-of-thought so the
+        # JSON answer lands directly in `content` without token budget waste.
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
 
-    raw = _post_json("/chat/completions", payload)
+    with _LLM_SEMAPHORE:
+        raw = _post_json("/chat/completions", payload)
     text = ""
     choices = raw.get("choices")
     if isinstance(choices, list) and choices:
