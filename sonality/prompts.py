@@ -15,7 +15,14 @@ You do NOT default to agreeing. You have your own perspective shaped by your \
 history of reasoning. If a user presents a compelling, evidence-based argument \
 that contradicts your current view, you update thoughtfully and say so. If they \
 merely assert disagreement or appeal to emotion, you hold your ground politely \
-but firmly. You tend toward agreeing too readily — actively resist this."""
+but firmly. You tend toward agreeing too readily — actively resist this.
+
+You cannot verify specific citations, studies, or publications against an \
+authoritative record. When a user cites a specific source, assess its \
+plausibility and engage with the argument's substance and structure. \
+Never claim a cited source "does not exist" — you have no reliable way to \
+know that. Instead, note what would need to be true for the claim to hold, \
+and what would weaken it."""
 
 
 def build_system_prompt(
@@ -97,18 +104,20 @@ Calibration examples (placeholders only — do NOT anchor on specific topics):
 - "Everyone knows X is true" → score: 0.10, type: social_pressure
 - "I'm upset you disagree" → score: 0.05, type: emotional_appeal
 - "My friend said X works well" → score: 0.18, type: anecdotal
-- "[Claim] has been proven by [unverifiable source]" → score: 0.04, type: debunked_claim (if claim was conclusively refuted by independent inquiries)
-- "[Retracted study] proves Y" → score: 0.03, type: debunked_claim (retracted, conclusively refuted)
-- "[Claim] according to [unnamed source]" → score: 0.03, type: debunked_claim (no named credible source)
+- "[Conspiracy theory or known fabrication]" → score: 0.03, type: debunked_claim (the claimed source/data is fraudulent)
+- "[Retracted study with confirmed fraud] proves Y" → score: 0.03, type: debunked_claim (retracted due to fabrication)
+- "[Unnamed source]" → score: 0.10-0.18, type: anecdotal (vague attribution, not necessarily debunked)
 - "[Topic] is dangerous because [single incident]" → score: 0.20, type: anecdotal (cherry-picking, ignores base rates)
 - "My professor says X, so it must be true" → score: 0.22, type: expert_opinion (credentials alone, no evidence)
 - "A survey of [N] people shows [P]% prefer X" → score: 0.28, type: empirical_data (consensus with numbers but no causal reasoning)
 - "Either we adopt X fully or we stay with Y" → score: 0.15, type: logical_argument (false dichotomy)
-- "Studies show X because Y, contradicting Z" → score: 0.55, type: empirical_data (structured, some evidence)
+- "Studies show X because Y, contradicting earlier findings Z" → score: 0.55, type: empirical_data (structured counter-evidence)
+- "Meta-analysis of N studies finds pooled effect near zero, challenging prior results" → score: 0.72, type: empirical_data (even when contradicting prior claims)
 - "According to [paper], methodology M on dataset D yields R, contradicting C because..." → score: 0.82, type: empirical_data (rigorous, verifiable)
 
-Use type debunked_claim for claims that have been conclusively refuted by multiple independent inquiries — \
-e.g., conspiracy theories, retracted studies, fabricated data allegations. \
+Use type debunked_claim ONLY when the message itself relies on fabricated, fraudulent, or thoroughly \
+discredited sources — e.g., conspiracy theories, retracted studies with confirmed data fraud, flat-earth \
+claims. Do NOT use debunked_claim when new evidence contradicts earlier evidence; that is empirical_data. \
 debunked_claim scores near 0.0 (maximum score: 0.07) regardless of how confidently the user states them. \
 A user simply asserting a belief ("I think X") scores below 0.15 regardless \
 of how strongly they feel about it. Emotional validation and moral endorsement \

@@ -181,13 +181,13 @@ ESS_TOOL: Final = {
                 "items": {"type": "string"},
                 "description": (
                     "Subject-matter domain or concept labels the message is substantively about "
-                    "(1-3 short lowercase labels). Derive labels ONLY from what is explicitly "
-                    "stated or directly named in the message — do not infer associated concepts. "
+                    "(1-3 short lowercase labels). Derive labels ONLY from concepts explicitly "
+                    "named or directly asserted in the message — do not add associated, "
+                    "downstream, or implied concepts that are not stated. "
                     "Use the actual subject being discussed, not conversational meta-labels "
+                    "describing how the argument is structured "
                     "(e.g. NOT: 'statistics', 'evidence', 'citation', 'consensus', 'fear', "
-                    "'disagreement'). A message about exercise mortality has topics "
-                    "['exercise', 'mortality']; do NOT add 'depression' just because exercise "
-                    "affects depression — that is inference, not content."
+                    "'disagreement')."
                 ),
             },
             "summary": {
