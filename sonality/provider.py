@@ -53,6 +53,9 @@ def _normalize_schema_notation(text: str) -> str:
     text = re.sub(r':\s*<int>', ': 0', text)
     # "X" | "Y" | "Z"  →  "X"  (keep first enum option)
     text = re.sub(r'"([^"]+)"\s*(?:\|\s*"[^"]*"\s*)+', r'"\1"', text)
+    # Unquoted pipe-separated options: RETAIN | DECAY | FORGET → "RETAIN"
+    # (matches after colon, before comma/brace)
+    text = re.sub(r':\s*([A-Z_]+)\s*(?:\|\s*[A-Z_]+\s*)+(?=[,}\s])', r': "\1"', text)
     # "X" or "Y" or "Z"  →  "X"  (same pattern with English "or")
     text = re.sub(r'"([^"]+)"\s*(?:or\s+"[^"]*"\s*)+', r'"\1"', text)
     # "option1/option2/..."  →  "option1"  (slash-separated alternatives in strings)
@@ -184,30 +187,24 @@ def _to_nonnegative_int(value: object) -> int:
     return 0
 
 
-def _headers(api_key: str = "") -> dict[str, str]:
-    headers = {"Content-Type": "application/json"}
-    key = api_key or config.API_KEY
-    if key:
-        headers["Authorization"] = f"Bearer {key}"
-    return headers
-
-
-def _endpoint(path: str, base_url: str = "") -> str:
-    base = (base_url or config.BASE_URL).rstrip("/")
-    normalized = path if path.startswith("/") else f"/{path}"
-    return f"{base}{normalized}"
-
-
 def _post_json(
     path: str, payload: Mapping[str, object], base_url: str = "", api_key: str = ""
 ) -> dict[str, object]:
     body = json.dumps(payload).encode("utf-8")
+    base = (base_url or config.BASE_URL).rstrip("/")
+    normalized = path if path.startswith("/") else f"/{path}"
+    url = f"{base}{normalized}"
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    key = api_key or config.API_KEY
+    if key:
+        headers["Authorization"] = f"Bearer {key}"
+
     max_attempts = 3
     for attempt in range(1, max_attempts + 1):
         request = Request(
-            _endpoint(path, base_url),
+            url,
             data=body,
-            headers=_headers(api_key),
+            headers=headers,
             method="POST",
         )
         try:
@@ -290,7 +287,7 @@ def chat_completion(
     temperature: float = -1.0,
     tools: Sequence[Mapping[str, object]] = (),
     tool_choice: Mapping[str, object] = _EMPTY_MAPPING,
-    disable_thinking: bool = False,
+    disable_thinking: bool = True,
 ) -> ChatResult:
     payload: dict[str, object] = {
         "model": model,

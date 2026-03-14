@@ -59,9 +59,6 @@ def _raw_call(
         model=model,
         messages=tuple(messages),
         max_tokens=max_tokens,
-        # Disable chain-of-thought for JSON extraction: thinking models waste
-        # their entire token budget on reasoning and truncate the actual JSON.
-        disable_thinking=True,
     )
     return completion.text
 
@@ -108,16 +105,8 @@ def llm_call[T: BaseModel](
     LLMCallResult with ``.value`` set to the validated Pydantic model on success,
     or ``.value = fallback`` on failure.
     """
-    resolved_model = model
-    resolved_max_tokens = max_tokens
-
     schema_name = response_model.__name__
-    log.debug(
-        "llm_call schema=%s model=%s prompt=%.80r",
-        schema_name,
-        resolved_model,
-        prompt,
-    )
+    log.debug("llm_call schema=%s model=%s prompt=%.80r", schema_name, model, prompt)
     last_error = ""
     raw_text = ""
 
@@ -125,8 +114,8 @@ def llm_call[T: BaseModel](
         try:
             raw_text = _raw_call(
                 prompt=prompt,
-                model=resolved_model,
-                max_tokens=resolved_max_tokens,
+                model=model,
+                max_tokens=max_tokens,
                 system=system,
             )
             data = _parse_json(raw_text)
@@ -147,9 +136,11 @@ def llm_call[T: BaseModel](
         except ValueError as exc:
             last_error = f"JSON parse error: {exc}"
             log.warning(
-                "llm_call attempt %d/%d schema=%s: %s | raw=%.80r",
+                "llm_call attempt %d/%d schema=%s: %s | raw=%.200r",
                 attempt, max_retries, schema_name, last_error, raw_text,
             )
+            # Log full raw text at debug level for forensic analysis
+            log.debug("llm_call full raw (schema=%s): %s", schema_name, raw_text)
 
         except ValidationError as exc:
             last_error = f"Schema validation: {exc}"
@@ -166,8 +157,8 @@ def llm_call[T: BaseModel](
                 )
                 repaired_text = _raw_call(
                     prompt=repair_prompt,
-                    model=resolved_model,
-                    max_tokens=resolved_max_tokens,
+                    model=model,
+                    max_tokens=max_tokens,
                 )
                 repaired_data = _parse_json(repaired_text)
                 value = response_model.model_validate(repaired_data)
