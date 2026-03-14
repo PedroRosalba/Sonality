@@ -7,6 +7,7 @@ Bi-temporal tracking with created_at/valid_at/expired_at on episodes.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,6 +18,8 @@ from neo4j import AsyncDriver, AsyncManagedTransaction
 
 from .. import config
 from .context_format import format_episode_line
+
+log = logging.getLogger(__name__)
 
 
 class EdgeType(StrEnum):
@@ -79,6 +82,11 @@ class MemoryGraph:
         segment_reasoning: str,
     ) -> None:
         """Store episode + derivatives + graph links in one write transaction."""
+        log.debug(
+            "GRAPH_TRACE store_episode: uid=%s topics=%s ess=%.2f derivs=%d prev=%s",
+            episode.uid[:8], topics[:3], episode.ess_score, len(derivatives),
+            prev_episode_uid[:8] if prev_episode_uid else "none",
+        )
         async with self._driver.session(database=_DB) as session:
             await session.execute_write(
                 self._store_episode_atomically_tx,
@@ -201,7 +209,7 @@ class MemoryGraph:
             MATCH (e:Episode {uid: $uid})
             CREATE (e)-[:DISCUSSES]->(t)
             """,
-            topic=topic,
+            topic=topic.strip().lower(),
             uid=episode_uid,
         )
 
@@ -248,6 +256,10 @@ class MemoryGraph:
         reasoning: str = "",
     ) -> None:
         """Create one belief provenance edge for an episode."""
+        log.debug(
+            "GRAPH_TRACE link_belief: ep=%s topic=%s edge=%s str=%.2f | %s",
+            episode_uid[:8], topic, edge_type.value, strength, reasoning[:60].replace('\n', ' '),
+        )
         async with self._driver.session(database=_DB) as session:
             await session.execute_write(
                 self._link_belief_tx, episode_uid, topic, edge_type, strength, reasoning
@@ -271,7 +283,7 @@ class MemoryGraph:
                 strength: $strength, reasoning: $reasoning, created_at: datetime()
             }}]->(b)
             """,
-            topic=topic,
+            topic=topic.strip().lower(),
             uid=episode_uid,
             strength=strength,
             reasoning=reasoning,
@@ -585,6 +597,54 @@ class MemoryGraph:
                 summary_uid=uid,
                 source_uid=source_uid,
             )
+
+    async def sync_beliefs(self, active_topics: set[str]) -> int:
+        """Remove Belief nodes not tracked in the sponge's active opinion vectors.
+
+        Called during reflection to keep the graph consistent with the sponge.
+        Uses case-insensitive comparison since sponge topics are normalized to lowercase.
+        Returns count of pruned Belief nodes.
+        """
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (b:Belief)
+                WHERE NOT toLower(b.topic) IN $active_topics
+                OPTIONAL MATCH (b)<-[r]-()
+                DELETE r, b
+                RETURN count(b) AS pruned
+                """,
+                active_topics=list(active_topics),
+            )
+            record = await result.single()
+            pruned = int(record["pruned"]) if record else 0
+            if pruned:
+                log.info("Belief sync: pruned %d orphan Belief nodes", pruned)
+            return pruned
+
+    async def prune_orphan_topics(self) -> int:
+        """Delete Topic nodes that have zero non-archived Episode connections.
+
+        Topics accumulate as the agent explores new subjects. When all episodes
+        for a topic are archived or deleted, the Topic node becomes an orphan.
+        """
+        async with self._driver.session(database=_DB) as session:
+            result = await session.run(
+                """
+                MATCH (t:Topic)
+                WHERE NOT EXISTS {
+                    MATCH (e:Episode)-[:DISCUSSES]->(t)
+                    WHERE NOT e.archived
+                }
+                DETACH DELETE t
+                RETURN count(t) AS pruned
+                """,
+            )
+            record = await result.single()
+            pruned = int(record["pruned"]) if record else 0
+            if pruned:
+                log.info("Topic pruning: removed %d orphan Topic nodes", pruned)
+            return pruned
 
     async def get_last_episode_uid(self) -> str:
         """Get the UID of the most recently created episode."""

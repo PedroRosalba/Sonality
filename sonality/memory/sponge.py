@@ -124,6 +124,7 @@ class SpongeState(BaseModel):
         Assumes `direction` is sign-like (negative/opposing, positive/supporting)
         and `magnitude` is non-negative.
         """
+        topic = topic.strip().lower()
         old = self.opinion_vectors.get(topic, 0.0)
         new = max(-1.0, min(1.0, old + direction * magnitude))
         self.opinion_vectors[topic] = new
@@ -173,6 +174,15 @@ class SpongeState(BaseModel):
             self.belief_meta[topic].confidence,
             self.belief_meta[topic].evidence_count,
         )
+        # Detailed belief trace for memory health analysis
+        meta = self.belief_meta[topic]
+        log.debug(
+            "BELIEF_TRACE topic=%s | pos=%.3f | conf=%.2f | uncert=%.2f | "
+            "ev=%d | support=%d | contra=%d | updates=%s",
+            topic, new, meta.confidence, meta.uncertainty,
+            meta.evidence_count, len(meta.supporting_episode_uids),
+            len(meta.contradicting_episode_uids), meta.recent_updates[-3:],
+        )
 
     def stage_opinion_update(
         self,
@@ -190,6 +200,7 @@ class SpongeState(BaseModel):
         new_uncertainty carries the LLM-assessed uncertainty for this evidence;
         -1.0 means not set (no LLM assessment available).
         """
+        topic = topic.strip().lower()
         signed = direction * magnitude
         if abs(signed) < 1e-9:
             return self.interaction_count
@@ -203,6 +214,10 @@ class SpongeState(BaseModel):
                 provenance=provenance,
                 new_uncertainty=new_uncertainty,
             )
+        )
+        log.debug(
+            "STAGED_UPDATE topic=%s | mag=%+.3f | due=%d | prov=%.40s",
+            topic, signed, due, provenance.replace('\n', ' '),
         )
         return due
 
@@ -237,7 +252,7 @@ class SpongeState(BaseModel):
             if abs(net) < 1e-4:
                 continue
             direction = 1.0 if net > 0 else -1.0
-            magnitude = abs(net)
+            magnitude = min(abs(net), 0.25)
             evidence_increment = len(updates)
             provenance = updates[-1].provenance
             # Apply the LLM-assessed uncertainty from the most recent staged update.
