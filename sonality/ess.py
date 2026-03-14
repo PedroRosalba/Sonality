@@ -9,7 +9,12 @@ from typing import Final, Literal, Protocol, cast
 
 from . import config
 from .prompts import ESS_CLASSIFICATION_PROMPT
-from .provider import chat_completion, extract_tool_call_arguments, parse_json_object
+from .provider import (
+    _to_nonnegative_int,
+    chat_completion,
+    extract_tool_call_arguments,
+    parse_json_object,
+)
 
 log = logging.getLogger(__name__)
 
@@ -57,6 +62,13 @@ class SourceReliability(StrEnum):
     NOT_APPLICABLE = "not_applicable"
 
 
+class KnowledgeDensity(StrEnum):
+    HIGH = "high"
+    MODERATE = "moderate"
+    LOW = "low"
+    NONE = "none"
+
+
 class InternalConsistencyStatus(StrEnum):
     CONSISTENT = "CONSISTENT"
     INCONSISTENT = "INCONSISTENT"
@@ -91,8 +103,17 @@ SOURCE_RELIABILITY_ALIASES: Final[dict[str, SourceReliability]] = {
     "na": SourceReliability.NOT_APPLICABLE,
     "n_a": SourceReliability.NOT_APPLICABLE,
 }
+KNOWLEDGE_DENSITY_ALIASES: Final[dict[str, KnowledgeDensity]] = {
+    "high": KnowledgeDensity.HIGH,
+    "moderate": KnowledgeDensity.MODERATE,
+    "medium": KnowledgeDensity.MODERATE,
+    "low": KnowledgeDensity.LOW,
+    "none": KnowledgeDensity.NONE,
+    "n_a": KnowledgeDensity.NONE,
+    "na": KnowledgeDensity.NONE,
+}
 INTERNAL_CONSISTENCY_ALIASES: Final[dict[str, InternalConsistencyStatus]] = {
-    # _normalize_label() lowercases everything, so "CONSISTENT" → "consistent"
+    # _parse_enum lowercases everything, so "CONSISTENT" → "consistent"
     "consistent": InternalConsistencyStatus.CONSISTENT,
     "inconsistent": InternalConsistencyStatus.INCONSISTENT,
     "true": InternalConsistencyStatus.CONSISTENT,
@@ -115,6 +136,7 @@ REASONING_TYPE_VALUES: Final[tuple[str, ...]] = tuple(_enum_values(ReasoningType
 SOURCE_RELIABILITY_VALUES: Final[tuple[str, ...]] = tuple(_enum_values(SourceReliability))
 OPINION_DIRECTION_VALUES: Final[tuple[str, ...]] = tuple(_enum_values(OpinionDirection))
 INTERNAL_CONSISTENCY_VALUES: Final[tuple[str, ...]] = tuple(_enum_values(InternalConsistencyStatus))
+KNOWLEDGE_DENSITY_VALUES: Final[tuple[str, ...]] = tuple(_enum_values(KnowledgeDensity))
 RETRY_ALLOWED_VALUES_NOTE: Final = (
     f"{RETRY_REQUIRED_FIELD_NOTE} Allowed reasoning_type values: "
     f"{', '.join(REASONING_TYPE_VALUES)}. Allowed opinion_direction values: "
@@ -122,7 +144,7 @@ RETRY_ALLOWED_VALUES_NOTE: Final = (
 )
 PROVIDER_JSON_ONLY_NOTE: Final = (
     "Return ONLY a valid JSON object with keys: score, reasoning_type, source_reliability, "
-    "internal_consistency, novelty, topics, summary, opinion_direction."
+    "internal_consistency, novelty, topics, summary, opinion_direction, knowledge_density."
 )
 
 
@@ -157,7 +179,16 @@ ESS_TOOL: Final = {
             "topics": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Key topics discussed (1-3 short labels).",
+                "description": (
+                    "Subject-matter domain or concept labels the message is substantively about "
+                    "(1-3 short lowercase labels). Derive labels ONLY from what is explicitly "
+                    "stated or directly named in the message — do not infer associated concepts. "
+                    "Use the actual subject being discussed, not conversational meta-labels "
+                    "(e.g. NOT: 'statistics', 'evidence', 'citation', 'consensus', 'fear', "
+                    "'disagreement'). A message about exercise mortality has topics "
+                    "['exercise', 'mortality']; do NOT add 'depression' just because exercise "
+                    "affects depression — that is inference, not content."
+                ),
             },
             "summary": {
                 "type": "string",
@@ -167,6 +198,11 @@ ESS_TOOL: Final = {
                 "type": "string",
                 "enum": list(OPINION_DIRECTION_VALUES),
                 "description": "Whether the user supports, opposes, or is neutral toward the primary topic.",
+            },
+            "knowledge_density": {
+                "type": "string",
+                "enum": list(KNOWLEDGE_DENSITY_VALUES),
+                "description": "Density of learnable factual/conceptual content: high (multiple verifiable claims or detailed exposition), moderate (some facts mixed with opinion/filler), low (mostly opinion or social), none (greetings, chitchat).",
             },
         },
         "required": [
@@ -178,6 +214,7 @@ ESS_TOOL: Final = {
             "topics",
             "summary",
             "opinion_direction",
+            "knowledge_density",
         ],
     },
 }
@@ -243,6 +280,7 @@ class ESSResult:
     topics: tuple[str, ...]
     summary: str
     opinion_direction: OpinionDirection = OpinionDirection.NEUTRAL
+    knowledge_density: KnowledgeDensity = KnowledgeDensity.NONE
     defaulted_fields: tuple[str, ...] = ()
     default_severity: DefaultSeverity = "none"
     attempt_count: int = 1
@@ -277,6 +315,7 @@ class CoercedEssPayload:
     topics: tuple[str, ...]
     summary: str
     opinion_direction: OpinionDirection
+    knowledge_density: KnowledgeDensity
     defaulted_fields: tuple[str, ...]
     default_severity: DefaultSeverity
 
@@ -302,15 +341,6 @@ def _clamp(value: float, low: float = 0.0, high: float = 1.0) -> float:
     return max(low, min(high, value))
 
 
-def _normalize_label(raw: str) -> str:
-    """Normalize enum-like free text into snake_case tokens."""
-    normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
-    normalized = ENUM_NORMALIZE_RE.sub("", normalized)
-    while "__" in normalized:
-        normalized = normalized.replace("__", "_")
-    return normalized.strip("_")
-
-
 def _parse_enum[E: StrEnum](
     cls: type[E],
     raw: object,
@@ -320,7 +350,11 @@ def _parse_enum[E: StrEnum](
     """Parse untrusted enum text with alias support and coercion signal."""
     if not isinstance(raw, str):
         return default, True
-    normalized = _normalize_label(raw)
+    normalized = raw.strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = ENUM_NORMALIZE_RE.sub("", normalized)
+    while "__" in normalized:
+        normalized = normalized.replace("__", "_")
+    normalized = normalized.strip("_")
     if normalized in aliases:
         return aliases[normalized], False
     try:
@@ -381,34 +415,6 @@ def _to_internal_consistency(value: object) -> tuple[InternalConsistencyStatus, 
         return InternalConsistencyStatus.CONSISTENT, True
     return InternalConsistencyStatus.CONSISTENT, True
 
-
-def _to_nonnegative_int(value: object) -> int:
-    if isinstance(value, bool):
-        return 0
-    if isinstance(value, int):
-        return max(value, 0)
-    if isinstance(value, float):
-        return max(int(value), 0)
-    return 0
-
-
-def _extract_tool_data(response: _ToolUseResponseProtocol) -> dict[str, object]:
-    """Extract tool-use payload from injected test-client responses."""
-    for block in response.content:
-        if block.type != "tool_use":
-            continue
-        payload = block.input
-        if isinstance(payload, Mapping):
-            return dict(payload)
-    return {}
-
-
-def _extract_usage_tokens(response: _ToolUseResponseProtocol) -> tuple[int, int]:
-    usage = response.usage
-    return (
-        _to_nonnegative_int(usage.input_tokens),
-        _to_nonnegative_int(usage.output_tokens),
-    )
 
 
 def _default_severity(defaulted_fields: tuple[str, ...]) -> DefaultSeverity:
@@ -481,10 +487,14 @@ def _run_classification_attempts(
                 tools=[ESS_TOOL],
                 tool_choice={"type": "tool", "name": "classify_evidence"},
             )
-            input_tokens, output_tokens = _extract_usage_tokens(response)
-            total_input_tokens += input_tokens
-            total_output_tokens += output_tokens
-            data = _extract_tool_data(response)
+            usage = response.usage
+            total_input_tokens += _to_nonnegative_int(usage.input_tokens)
+            total_output_tokens += _to_nonnegative_int(usage.output_tokens)
+            data = {}
+            for block in response.content:
+                if block.type == "tool_use" and isinstance(block.input, Mapping):
+                    data = dict(block.input)
+                    break
         else:
             completion = chat_completion(
                 model=model,
@@ -498,7 +508,6 @@ def _run_classification_attempts(
                 ),
                 tools=(PROVIDER_ESS_TOOL,),
                 tool_choice=PROVIDER_ESS_TOOL_CHOICE,
-                disable_thinking=True,
             )
             total_input_tokens += completion.input_tokens
             total_output_tokens += completion.output_tokens
@@ -606,6 +615,15 @@ def _coerce_payload(data: Mapping[str, object]) -> CoercedEssPayload:
     if not isinstance(summary_raw, str) and "summary" in data:
         coerced_fields.append("summary")
 
+    knowledge_density = _coerce_enum_field(
+        cls=KnowledgeDensity,
+        data=data,
+        field="knowledge_density",
+        default=KnowledgeDensity.NONE,
+        aliases=KNOWLEDGE_DENSITY_ALIASES,
+        coerced_fields=coerced_fields,
+    )
+
     defaulted_fields = _build_defaulted_fields(missing_fields, coerced_fields)
     return CoercedEssPayload(
         score=score_value,
@@ -616,6 +634,7 @@ def _coerce_payload(data: Mapping[str, object]) -> CoercedEssPayload:
         topics=topics,
         summary=summary,
         opinion_direction=direction,
+        knowledge_density=knowledge_density,
         defaulted_fields=defaulted_fields,
         default_severity=_default_severity(defaulted_fields),
     )
@@ -658,6 +677,7 @@ def classify(
         topics=payload.topics,
         summary=payload.summary,
         opinion_direction=payload.opinion_direction,
+        knowledge_density=payload.knowledge_density,
         defaulted_fields=payload.defaulted_fields,
         default_severity=payload.default_severity,
         attempt_count=max(attempts.attempts_executed, 1),
