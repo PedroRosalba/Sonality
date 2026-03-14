@@ -66,13 +66,16 @@ FIDELITY_SCENARIOS = [
 pytestmark = [
     pytest.mark.bench,
     pytest.mark.live,
-    pytest.mark.skipif(not config.API_KEY, reason="No provider API key configured"),
+    pytest.mark.skipif(
+        bool(config.missing_live_api_config()),
+        reason=f"Missing live config: {config.missing_live_api_config()}",
+    ),
 ]
 
 
 class TestFidelityLive:
     def test_persona_fidelity_across_scenarios(self) -> None:
-        """Test that persona fidelity across scenarios."""
+        """LLM-as-judge alignment scores average >= 3.0/5 across persona scenarios."""
         all_scores: list[float] = []
 
         print(f"\n{'=' * 70}")
@@ -106,7 +109,7 @@ class TestFidelityLive:
 
 
 def _generate_response(persona: str, question: str) -> str:
-    """Test helper for generate response."""
+    """Generate agent response for a given persona and question via chat_completion."""
     from sonality.prompts import build_system_prompt
 
     system = build_system_prompt(persona, [])
@@ -122,7 +125,7 @@ def _generate_response(persona: str, question: str) -> str:
 
 
 def _judge_alignment(persona: str, question: str, response: str) -> float:
-    """Test helper for judge alignment."""
+    """Score persona-response alignment (1-5) using an LLM-as-judge prompt."""
     import json
 
     prompt = JUDGE_PROMPT.format(persona=persona, question=question, response=response)

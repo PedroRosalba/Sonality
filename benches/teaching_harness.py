@@ -3543,21 +3543,6 @@ def _extend_pack_risk_rows(
         )
 
 
-def _append_optional_probe_row(
-    *,
-    probe_rows: list[dict[str, object]],
-    build_row: ProbeRowBuilder,
-    run_id: str,
-    profile: ProfileName,
-    replicate: int,
-    pack: PackDefinition,
-    steps: list[StepResult],
-) -> None:
-    """Append a probe row when the pack-specific builder returns one."""
-    probe_row = build_row(run_id, profile, replicate, pack, steps)
-    if probe_row:
-        probe_rows.append(probe_row)
-
 
 def _contract_probe_builder(spec: ContractPackSpec) -> ProbeRowBuilder:
     """Build a pack probe-row builder from a contract specification."""
@@ -3714,7 +3699,7 @@ def _probe_row_builders_by_pack() -> dict[str, tuple[tuple[str, ProbeRowBuilder]
 
 
 @cache
-def _probe_artifact_names() -> tuple[str, ...]:
+def probe_artifact_names() -> tuple[str, ...]:
     """Return probe artifact names in deterministic declaration order."""
     names: list[str] = []
     seen: set[str] = set()
@@ -3738,15 +3723,9 @@ def _extend_probe_trace_rows(
 ) -> None:
     """Append all applicable probe trace rows for one pack replicate."""
     for artifact_name, probe_builder in _probe_row_builders_by_pack().get(pack.key, ()):
-        _append_optional_probe_row(
-            probe_rows=probe_trace_rows[artifact_name],
-            build_row=probe_builder,
-            run_id=run_id,
-            profile=profile,
-            replicate=replicate,
-            pack=pack,
-            steps=steps,
-        )
+        probe_row = probe_builder(run_id, profile, replicate, pack, steps)
+        if probe_row:
+            probe_trace_rows[artifact_name].append(probe_row)
 
 
 @dataclass(slots=True)
@@ -3832,7 +3811,7 @@ def _empty_row_collections() -> BenchmarkRowCollections:
         belief_delta_rows=[],
         run_isolation_rows=[],
         memory_validity_rows=[],
-        probe_trace_rows={artifact_name: [] for artifact_name in _probe_artifact_names()},
+        probe_trace_rows={artifact_name: [] for artifact_name in probe_artifact_names()},
         contract_probe_rows={spec.key: [] for spec in CONTRACT_PACK_SPECS.values()},
         health_metric_rows=[],
         observer_rows=[],
@@ -3988,7 +3967,7 @@ def _trace_artifacts(
     ]
     artifacts.extend(
         (artifact_name, collections.probe_trace_rows[artifact_name])
-        for artifact_name in _probe_artifact_names()
+        for artifact_name in probe_artifact_names()
     )
     artifacts.extend(
         (f"{contract_key}_trace.jsonl", rows)
@@ -4025,23 +4004,6 @@ def _record_replicate_metric_samples(
     metric_samples["ess_retry_stable"].append(retry_stats.retry_stable)
     return retry_stats
 
-
-def _stop_rule_trace_row(
-    *,
-    run_id: str,
-    replicate: int,
-    stop_decision: StopRuleDecision,
-) -> dict[str, object]:
-    """Build one stop-rule trace row for a replicate checkpoint."""
-    return {
-        "run_id": run_id,
-        "replicate": replicate,
-        "continue_running": stop_decision.continue_running,
-        "reason": stop_decision.reason,
-        "inconclusive_metrics": list(stop_decision.inconclusive_metrics),
-        "near_boundary_hard_metrics": list(stop_decision.near_boundary_hard_metrics),
-        "ts": datetime.now(UTC).isoformat(),
-    }
 
 
 def _progress_enabled(progress: BenchProgressLevel, minimum: BenchProgressLevel) -> bool:
@@ -4296,13 +4258,15 @@ def _run_replicates(
             replicates_executed=replicate,
             profile=profile,
         )
-        stop_rule_rows.append(
-            _stop_rule_trace_row(
-                run_id=run_id,
-                replicate=replicate,
-                stop_decision=stop_decision,
-            )
-        )
+        stop_rule_rows.append({
+            "run_id": run_id,
+            "replicate": replicate,
+            "continue_running": stop_decision.continue_running,
+            "reason": stop_decision.reason,
+            "inconclusive_metrics": list(stop_decision.inconclusive_metrics),
+            "near_boundary_hard_metrics": list(stop_decision.near_boundary_hard_metrics),
+            "ts": datetime.now(UTC).isoformat(),
+        })
         elapsed_seconds = (datetime.now(UTC) - replicate_started).total_seconds()
         _emit_progress(
             progress=progress,
@@ -4393,15 +4357,6 @@ def _manifest_run_envelope(packs: tuple[PackDefinition, ...]) -> dict[str, objec
         "rubric_version": RUBRIC_VERSION,
     }
 
-
-def _manifest_interval_switch_policy() -> dict[str, object]:
-    """Build interval-family policy metadata for benchmark manifests."""
-    return {
-        "small_n_or_boundary": "exact_binomial",
-        "default": "wilson",
-        "forbid_wald_for_critical": True,
-        "small_n_lt": INTERVAL_SWITCH_SMALL_N_LT,
-    }
 
 
 def _manifest_state_isolation_policy() -> dict[str, object]:
@@ -4554,7 +4509,12 @@ def _run_manifest_payload(
         "threshold_registry_version": THRESHOLD_REGISTRY_VERSION,
         "threshold_registry": [asdict(spec) for spec in THRESHOLD_REGISTRY],
         "threshold_registry_hash": threshold_registry_hash,
-        "interval_switch_policy": _manifest_interval_switch_policy(),
+        "interval_switch_policy": {
+            "small_n_or_boundary": "exact_binomial",
+            "default": "wilson",
+            "forbid_wald_for_critical": True,
+            "small_n_lt": INTERVAL_SWITCH_SMALL_N_LT,
+        },
         "state_isolation_policy": _manifest_state_isolation_policy(),
         "packs": _manifest_pack_metadata(packs),
         "pack_fingerprints": {pack.key: _pack_fingerprint(pack) for pack in packs},
@@ -5650,21 +5610,21 @@ def _memory_structure_hard_failures(steps: list[StepResult]) -> list[str]:
         failures.append("missing memory-structure synthesis step")
         return failures
 
-    shape_ok, shape_issues, line_count = _memory_structure_response_shape(synthesis.response_text)
+    shape_ok, shape_issues, line_count = memory_structure_response_shape(synthesis.response_text)
     if not shape_ok:
         failures.append(
             "memory-structure synthesis invalid section contract: "
             f"{list(shape_issues)} (line_count={line_count})"
         )
 
-    anchors_ok, missing_anchor_sections = _memory_structure_context_anchors(synthesis.response_text)
+    anchors_ok, missing_anchor_sections = memory_structure_context_anchors(synthesis.response_text)
     if not anchors_ok and len(missing_anchor_sections) > 1:
         failures.append(
             "memory-structure synthesis weak context anchors in sections: "
             f"{list(missing_anchor_sections)}"
         )
 
-    binding_ok, bound_topics, missing_topics = _memory_structure_topic_binding(
+    binding_ok, bound_topics, missing_topics = memory_structure_topic_binding(
         response_text=synthesis.response_text,
         opinion_vectors=synthesis.opinion_vectors,
     )
@@ -5674,7 +5634,7 @@ def _memory_structure_hard_failures(steps: list[StepResult]) -> list[str]:
             f"bound={list(bound_topics)} missing={list(missing_topics)}"
         )
 
-    alignment_ok, missing_alignment_sections = _memory_structure_section_alignment(
+    alignment_ok, missing_alignment_sections = memory_structure_section_alignment(
         response_text=synthesis.response_text,
         opinion_vectors=synthesis.opinion_vectors,
     )
@@ -5961,7 +5921,7 @@ def _memory_structure_synthesis_semantic_rows(
 ) -> list[dict[str, object]]:
     """Emit semantic/structure risk rows for memory-structure synthesis output."""
     rows: list[dict[str, object]] = []
-    shape_ok, shape_issues, line_count = _memory_structure_response_shape(synthesis.response_text)
+    shape_ok, shape_issues, line_count = memory_structure_response_shape(synthesis.response_text)
     if not shape_ok:
         rows.append(
             _risk_event_row(
@@ -5978,7 +5938,7 @@ def _memory_structure_synthesis_semantic_rows(
             )
         )
 
-    anchors_ok, missing_anchor_sections = _memory_structure_context_anchors(synthesis.response_text)
+    anchors_ok, missing_anchor_sections = memory_structure_context_anchors(synthesis.response_text)
     if not anchors_ok:
         rows.append(
             _risk_event_row(
@@ -5992,7 +5952,7 @@ def _memory_structure_synthesis_semantic_rows(
             )
         )
 
-    binding_ok, bound_topics, missing_topics = _memory_structure_topic_binding(
+    binding_ok, bound_topics, missing_topics = memory_structure_topic_binding(
         response_text=synthesis.response_text,
         opinion_vectors=synthesis.opinion_vectors,
     )
@@ -6012,7 +5972,7 @@ def _memory_structure_synthesis_semantic_rows(
             )
         )
 
-    alignment_ok, missing_alignment_sections = _memory_structure_section_alignment(
+    alignment_ok, missing_alignment_sections = memory_structure_section_alignment(
         response_text=synthesis.response_text,
         opinion_vectors=synthesis.opinion_vectors,
     )
@@ -8618,13 +8578,13 @@ def _memory_structure_probe_row(
     nontrivial_beliefs = sorted(
         topic for topic, value in synthesis.opinion_vectors.items() if abs(value) >= 0.05
     )
-    shape_ok, shape_issues, line_count = _memory_structure_response_shape(synthesis.response_text)
-    anchors_ok, missing_anchor_sections = _memory_structure_context_anchors(synthesis.response_text)
-    binding_ok, bound_topics, missing_topics = _memory_structure_topic_binding(
+    shape_ok, shape_issues, line_count = memory_structure_response_shape(synthesis.response_text)
+    anchors_ok, missing_anchor_sections = memory_structure_context_anchors(synthesis.response_text)
+    binding_ok, bound_topics, missing_topics = memory_structure_topic_binding(
         response_text=synthesis.response_text,
         opinion_vectors=synthesis.opinion_vectors,
     )
-    alignment_ok, missing_alignment_sections = _memory_structure_section_alignment(
+    alignment_ok, missing_alignment_sections = memory_structure_section_alignment(
         response_text=synthesis.response_text,
         opinion_vectors=synthesis.opinion_vectors,
     )
@@ -8697,7 +8657,7 @@ def _memory_leakage_probe_row(
     }
 
 
-def _memory_structure_response_shape(response_text: str) -> tuple[bool, tuple[str, ...], int]:
+def memory_structure_response_shape(response_text: str) -> tuple[bool, tuple[str, ...], int]:
     """Validate response section shape constraints for memory structure output."""
     lines = [line.strip() for line in response_text.splitlines() if line.strip()]
     seen: set[str] = set()
@@ -8760,7 +8720,7 @@ def _memory_structure_response_shape(response_text: str) -> tuple[bool, tuple[st
     return (not issues), tuple(issues), len(lines)
 
 
-def _memory_structure_context_anchors(response_text: str) -> tuple[bool, tuple[str, ...]]:
+def memory_structure_context_anchors(response_text: str) -> tuple[bool, tuple[str, ...]]:
     """Check section-level context anchors in synthesis output."""
     section_payloads = _memory_structure_section_payloads(response_text)
 
@@ -8806,7 +8766,7 @@ def _topic_tokens(topic: str) -> tuple[str, ...]:
     )
 
 
-def _memory_structure_topic_binding(
+def memory_structure_topic_binding(
     response_text: str,
     opinion_vectors: dict[str, float],
 ) -> tuple[bool, tuple[str, ...], tuple[str, ...]]:
@@ -8834,7 +8794,7 @@ def _memory_structure_topic_binding(
     return len(bound_topics) >= required_bindings, tuple(bound_topics), tuple(missing_topics)
 
 
-def _memory_structure_section_alignment(
+def memory_structure_section_alignment(
     response_text: str,
     opinion_vectors: dict[str, float],
 ) -> tuple[bool, tuple[str, ...]]:

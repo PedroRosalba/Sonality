@@ -16,7 +16,10 @@ SAMPLE_PATH = Path(__file__).resolve().parents[1] / "tests" / "data" / "ibm_argq
 pytestmark = [
     pytest.mark.bench,
     pytest.mark.live,
-    pytest.mark.skipif(not config.API_KEY, reason="SONALITY_API_KEY not set"),
+    pytest.mark.skipif(
+        bool(config.missing_live_api_config()),
+        reason=f"Missing live config: {config.missing_live_api_config()}",
+    ),
 ]
 
 
@@ -27,7 +30,7 @@ class _ArgSampleRow(TypedDict):
 
 
 def _load_sample() -> list[_ArgSampleRow]:
-    """Test helper for load sample."""
+    """Load IBM-ArgQ argument-quality sample from JSON fixture."""
     payload = json.loads(SAMPLE_PATH.read_text())
     if not isinstance(payload, list):
         return []
@@ -54,7 +57,7 @@ def _load_sample() -> list[_ArgSampleRow]:
 
 class TestESSCalibrationWithIBMArgQ:
     def test_ess_spearman_correlation(self) -> None:
-        """Test that ess spearman correlation."""
+        """ESS scores correlate with IBM-ArgQ human quality ranks (Spearman rho >= 0.4)."""
         from sonality.ess import PROVIDER_CLIENT, classify
         from sonality.memory.sponge import SEED_SNAPSHOT
 
@@ -104,13 +107,13 @@ class TestESSCalibrationWithIBMArgQ:
 
 
 def _spearman_rho(x: list[float], y: list[float]) -> float:
-    """Test helper for spearman rho."""
+    """Compute Spearman rank correlation coefficient between two float sequences."""
     n = len(x)
     if n < 3:
         return 0.0
 
     def _rank(vals: list[float]) -> list[float]:
-        """Test helper for rank."""
+        """Assign average ranks to values, handling ties."""
         indexed = sorted(enumerate(vals), key=lambda p: p[1])
         ranks = [0.0] * n
         i = 0
@@ -131,7 +134,7 @@ def _spearman_rho(x: list[float], y: list[float]) -> float:
 
 
 def _std(vals: list[float]) -> float:
-    """Test helper for std."""
+    """Population standard deviation of a float sequence."""
     mean = sum(vals) / len(vals)
     variance = sum((v - mean) ** 2 for v in vals) / len(vals)
     return math.sqrt(variance)
