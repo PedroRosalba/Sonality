@@ -27,7 +27,7 @@ def _show_health(agent: SonalityAgent) -> None:
     else:
         maturity = "Layer 3 (autonomous expansion)"
 
-    entrenched = agent._current_entrenched_topics()
+    entrenched = agent._detect_entrenched_beliefs_llm()
     contradictions = agent._collect_unresolved_contradictions()
     contradiction_line = ", ".join(contradictions[:3]) if contradictions else "none"
     recent = s.recent_shifts[-1] if s.recent_shifts else None
