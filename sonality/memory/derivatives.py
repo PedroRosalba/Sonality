@@ -114,16 +114,6 @@ class DerivativeChunker:
 
     def _llm_chunk(self, text: str) -> list[ChunkItem]:
         """Use LLM to split text into semantic chunks."""
-        # Short texts don't need chunking
-        if len(text) < 100:
-            return [
-                ChunkItem(
-                    text=text,
-                    key_concept="brief_content",
-                    importance=ChunkImportance.MEDIUM,
-                )
-            ]
-
         prompt = CHUNKING_PROMPT.format(text=text)
         result = llm_call(
             prompt=prompt,

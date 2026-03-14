@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import queue
+import re
 import threading
 import uuid
 from collections.abc import Coroutine
@@ -16,11 +17,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeVar
 
-_T = TypeVar("_T")
-
 from psycopg_pool import AsyncConnectionPool
-import re
-
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from .. import config
@@ -255,12 +252,6 @@ class SemanticIngestionWorker:
         except Exception:
             log.exception("Feature consolidation failed for category=%s", category)
 
-    @staticmethod
-    def _feature_uid(category: str, tag: str, feature_name: str) -> str:
-        """Build stable UID so repeated writes upsert the same semantic feature."""
-        seed = f"semantic:{category}:{tag.strip().lower()}:{feature_name.strip().lower()}"
-        return str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
-
     def _load_existing_features(self, category: str) -> str:
         """Load current category features to give extractor update/delete context."""
         try:
@@ -322,12 +313,6 @@ class SemanticIngestionWorker:
                 )
             )
 
-    @staticmethod
-    def _normalize_citations(citations_obj: object) -> list[str]:
-        if isinstance(citations_obj, list):
-            return [str(citation) for citation in citations_obj]
-        return []
-
     @classmethod
     def _row_to_feature(
         cls, row: tuple[object, object, object, object, object, object]
@@ -340,7 +325,7 @@ class SemanticIngestionWorker:
             feature_name=str(row[2]),
             value=str(row[3]),
             confidence=confidence,
-            citations=cls._normalize_citations(row[5]),
+            citations=[str(c) for c in row[5]] if isinstance(row[5], list) else [],
         )
 
     async def _load_feature_rows_async(
@@ -444,7 +429,8 @@ class SemanticIngestionWorker:
         self, episode_uid: str, category: str, cmd: FeatureCommand
     ) -> None:
         """Persist feature command to PostgreSQL."""
-        feature_uid = self._feature_uid(category, cmd.tag, cmd.feature)
+        seed = f"semantic:{category}:{cmd.tag.strip().lower()}:{cmd.feature.strip().lower()}"
+        feature_uid = str(uuid.uuid5(uuid.NAMESPACE_URL, seed))
         embedding: list[float] = []
         if cmd.command in {FeatureCommandType.ADD, FeatureCommandType.UPDATE}:
             # Run synchronous HTTP embedding in a thread so the event loop stays free

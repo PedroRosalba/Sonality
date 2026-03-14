@@ -26,17 +26,13 @@ class EmbedderConfig:
     batch_size: int
 
 
-def _resolve_config() -> EmbedderConfig:
-    return EmbedderConfig(
-        model=config.EMBEDDING_MODEL,
-        dimensions=config.EMBEDDING_DIMENSIONS,
-        query_instruction=config.EMBEDDING_QUERY_INSTRUCTION,
-        doc_instruction=config.EMBEDDING_DOC_INSTRUCTION,
-        batch_size=config.EMBEDDING_BATCH_SIZE,
-    )
-
-
-DEFAULT_EMBEDDER_CONFIG = _resolve_config()
+DEFAULT_EMBEDDER_CONFIG = EmbedderConfig(
+    model=config.EMBEDDING_MODEL,
+    dimensions=config.EMBEDDING_DIMENSIONS,
+    query_instruction=config.EMBEDDING_QUERY_INSTRUCTION,
+    doc_instruction=config.EMBEDDING_DOC_INSTRUCTION,
+    batch_size=config.EMBEDDING_BATCH_SIZE,
+)
 
 
 class ExternalEmbedder:
@@ -69,7 +65,15 @@ class ExternalEmbedder:
 
         for i in range(0, len(texts), batch_size):
             batch = texts[i : i + batch_size]
-            embeddings = self._call_provider(batch)
+            try:
+                embeddings = provider_embed(
+                    model=self._cfg.model,
+                    texts=batch,
+                    dimensions=self._cfg.dimensions,
+                )
+            except Exception as exc:
+                log.error("Embedding request failed: %s", exc)
+                raise EmbeddingUnavailableError(str(exc)) from exc
             all_embeddings.extend(embeddings)
 
         if len(all_embeddings) != len(texts):
@@ -77,15 +81,3 @@ class ExternalEmbedder:
                 f"Embedding count mismatch: expected {len(texts)}, got {len(all_embeddings)}"
             )
         return all_embeddings
-
-    def _call_provider(self, texts: list[str]) -> list[list[float]]:
-        """Call the unified provider embedding endpoint."""
-        try:
-            return provider_embed(
-                model=self._cfg.model,
-                texts=texts,
-                dimensions=self._cfg.dimensions,
-            )
-        except Exception as exc:
-            log.error("Embedding request failed: %s", exc)
-            raise EmbeddingUnavailableError(str(exc)) from exc

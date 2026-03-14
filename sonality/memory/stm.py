@@ -63,7 +63,7 @@ class ShortTermMemory:
         )
         self._buffer.append(msg)
 
-        while self._total_chars() > self._capacity and self._buffer:
+        while sum(len(m.content) for m in self._buffer) > self._capacity and self._buffer:
             evicted = self._buffer.popleft()
             self._eviction_queue.append(evicted)
 
@@ -143,5 +143,3 @@ class ShortTermMemory:
             )
         return parsed
 
-    def _total_chars(self) -> int:
-        return sum(len(m.content) for m in self._buffer)

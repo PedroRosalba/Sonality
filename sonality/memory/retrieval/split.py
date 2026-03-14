@@ -115,31 +115,22 @@ class SplitQueryAgent:
     ) -> list[EpisodeNode]:
         """Aggregate per-sub-query episodes using the requested strategy."""
         if strategy is AggregationStrategy.COMPARE:
-            return self._dedupe_by_uid(self._round_robin(sub_results))
+            # Interleave batches round-robin to preserve cross-entity balance
+            interleaved: list[EpisodeNode] = []
+            max_len = max((len(batch) for batch in sub_results), default=0)
+            for index in range(max_len):
+                for batch in sub_results:
+                    if index < len(batch):
+                        interleaved.append(batch[index])
+            return self._dedupe_by_uid(interleaved)
         if strategy is AggregationStrategy.TIMELINE:
             merged = self._dedupe_by_uid([ep for batch in sub_results for ep in batch])
             return sorted(merged, key=lambda episode: episode.created_at)
         return self._dedupe_by_uid([ep for batch in sub_results for ep in batch])
 
-    def _round_robin(self, batches: list[list[EpisodeNode]]) -> list[EpisodeNode]:
-        """Interleave batches to preserve cross-entity balance."""
-        if not batches:
-            return []
-        max_len = max((len(batch) for batch in batches), default=0)
-        interleaved: list[EpisodeNode] = []
-        for index in range(max_len):
-            for batch in batches:
-                if index < len(batch):
-                    interleaved.append(batch[index])
-        return interleaved
-
     def _dedupe_by_uid(self, episodes: list[EpisodeNode]) -> list[EpisodeNode]:
         """Keep first occurrence per UID while preserving order."""
-        seen_uids: set[str] = set()
-        deduped: list[EpisodeNode] = []
-        for episode in episodes:
-            if episode.uid in seen_uids:
-                continue
-            seen_uids.add(episode.uid)
-            deduped.append(episode)
-        return deduped
+        seen: dict[str, EpisodeNode] = {}
+        for ep in episodes:
+            seen.setdefault(ep.uid, ep)
+        return list(seen.values())
