@@ -217,35 +217,3 @@ def print_composite_report(report: CompositeReport) -> None:
     print(f"{'=' * 70}")
 
 
-def print_integration_summary(reports: list[CompositeReport]) -> None:
-    """Print a summary across all composed scenarios."""
-    print(f"\n{'=' * 70}")
-    print("  INTEGRATED CAPABILITY INDEX")
-    print(f"{'=' * 70}")
-
-    all_dims: set[str] = set()
-    for r in reports:
-        all_dims.update(r.dimensions.keys())
-    dim_names = sorted(all_dims)
-
-    header = f"  {'Scenario':<20s}"
-    for name in dim_names:
-        short = name[:6]
-        header += f" {short:>6s}"
-    header += f" {'COMP':>6s}"
-    print(header)
-    print(f"  {'-' * 20}" + f" {'-' * 6}" * (len(dim_names) + 1))
-
-    for r in reports:
-        row = f"  {r.scenario_name[:20]:<20s}"
-        for name in dim_names:
-            d = r.dimensions.get(name)
-            row += f" {d.normalized:>5.0%}" if d else f" {'N/A':>6s}"
-        row += f" {r.composite_score:>5.0%}"
-        print(row)
-
-    if reports:
-        overall = sum(r.composite_score for r in reports) / len(reports)
-        print(f"  {'-' * 20}" + f" {'-' * 6}" * (len(dim_names) + 1))
-        print(f"  {'OVERALL':<20s}" + " " * (6 * len(dim_names)) + f" {overall:>5.0%}")
-    print(f"{'=' * 70}")

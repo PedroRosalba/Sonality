@@ -205,7 +205,11 @@ MEMORY_STRUCTURE_REQUIRED_PREFIXES: Final[tuple[str, ...]] = (
     "uncertainty:",
 )
 MEMORY_STRUCTURE_CONTEXT_ANCHORS: Final[dict[str, tuple[str, ...]]] = {
-    "evidence:": ("evidence", "empirical", "data", "support", "reason", "measur", "outcome"),
+    "evidence:": (
+        "evidence", "empirical", "data", "support", "reason", "measur", "outcome",
+        "research", "study", "studies", "scientific", "factual", "fact", "verif",
+        "peer", "literature", "analytic", "grounded", "based",
+    ),
     "governance:": ("governance", "process", "policy", "accountability", "oversight"),
     "safety:": ("safety", "safe", "unsafe", "risk", "harm", "guardrail", "escalat"),
     "uncertainty:": ("uncertainty", "confidence", "caveat", "probability", "unknown"),

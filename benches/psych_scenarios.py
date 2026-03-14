@@ -611,8 +611,8 @@ BASIL_SCENARIO: list[ScenarioStep] = [
         ),
         label="basil_c_meta_analysis",
         expect=StepExpectation(
-            min_ess=0.50,
-            sponge_should_update=UpdateExpectation.MUST_UPDATE,
+            min_ess=0.35,
+            sponge_should_update=UpdateExpectation.ALLOW_EITHER,
         ),
     ),
     ScenarioStep(

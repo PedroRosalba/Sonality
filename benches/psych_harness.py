@@ -374,16 +374,3 @@ def print_step_results(results: list[StepResult], title: str) -> None:
     print(f"{'=' * 70}")
 
 
-def print_psych_summary(reports: list[BatteryReport]) -> None:
-    """Print a summary table across all batteries."""
-    print(f"\n{'=' * 70}")
-    print("  PSYCHOLOGICAL STABILITY INDEX")
-    print(f"{'=' * 70}")
-    print(f"  {'Battery':<40s} {'Pass%':>6s} {'Score':>6s}")
-    print(f"  {'-' * 40} {'-' * 6} {'-' * 6}")
-    for r in reports:
-        print(f"  {r.battery_name:<40s} {r.pass_rate:>5.0%} {r.score:>6.2f}")
-    overall = sum(r.score for r in reports) / len(reports) if reports else 0.0
-    print(f"  {'-' * 40} {'-' * 6} {'-' * 6}")
-    print(f"  {'OVERALL':<40s} {'':>6s} {overall:>6.2f}")
-    print(f"{'=' * 70}")

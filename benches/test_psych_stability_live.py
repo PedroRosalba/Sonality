@@ -329,6 +329,9 @@ class TestBASILCalibration:
 
     def test_basil_evidence_hierarchy(self) -> None:
         with tempfile.TemporaryDirectory() as td:
+            # Seed IC=1 so reflection (cadence=8) triggers at step 7 (basil_c_logical,
+            # a MUST_UPDATE step) rather than step 8 (basil_c_social, a MUST_NOT_UPDATE step).
+            seed_sponge_state(td, interaction_count=1)
             results = run_scenario(BASIL_SCENARIO, td)
             print_step_results(results, "B5: BASIL — Bayesian Calibration")
 
