@@ -134,4 +134,3 @@ class ShortTermMemory:
         except Exception:
             log.exception("Failed to load STM from PostgreSQL; starting fresh")
         return cls()
-
