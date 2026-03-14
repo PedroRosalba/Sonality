@@ -123,7 +123,7 @@ typecheck: ## Type-check code (mypy)
 	uv run mypy sonality/
 
 test: ## Run tests (pytest, skip live API tests)
-	uv run pytest -v -k "not live"
+	uv run pytest tests -m "not live" -v
 
 bench-contracts: ## Run non-live benchmark contracts (no API)
 	uv run pytest benches -m "bench and not live" -q
@@ -135,8 +135,8 @@ test-all: ## Run all tests including live API tests
 	uv run pytest tests benches -v --tb=short -s
 
 test-report: ## Run tests with JSON report and summary table
-	uv run pytest -v -k "not live" --tb=short --json-report --json-report-file=test-report.json 2>/dev/null || \
-		uv run pytest -v -k "not live" --tb=short --junitxml=test-report.xml
+	uv run pytest tests -m "not live" -v --tb=short --json-report --json-report-file=test-report.json 2>/dev/null || \
+		uv run pytest tests -m "not live" -v --tb=short --junitxml=test-report.xml
 	@echo ""
 	@echo "Test report written to test-report.json (or test-report.xml)"
 
