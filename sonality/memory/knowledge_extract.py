@@ -39,8 +39,8 @@ log = logging.getLogger(__name__)
 
 WINDOW_SIZE_WORDS = 1500
 WINDOW_OVERLAP_RATIO = 0.20
-DEDUP_THRESHOLD_EXISTING = 0.92
-DEDUP_THRESHOLD_INTRABATCH = 0.95
+DEDUP_THRESHOLD_EXISTING = 0.85
+DEDUP_THRESHOLD_INTRABATCH = 0.90
 
 
 class PropositionType(StrEnum):
@@ -330,6 +330,8 @@ async def extract_and_store_knowledge(
     pg_pool: AsyncConnectionPool,
     embedder: ExternalEmbedder,
     sponge: SpongeState,
+    *,
+    stage_opinions: bool = True,
 ) -> int:
     """Full pipeline: window → extract → dedup → store.
 
@@ -342,6 +344,12 @@ async def extract_and_store_knowledge(
       4a. Intra-batch deduplication (across windows)
       4b. Dedup against existing + evidence accumulation (MMA 2025)
       5. Persist to semantic_features; route opinions to sponge
+
+    Args:
+        stage_opinions: If False, skip staging opinion-type propositions as
+            belief updates. Use for manipulative turns (social_pressure,
+            emotional_appeal, etc.) where the textual content may contain
+            claims that should be stored as knowledge but not influence beliefs.
     """
     windows = _split_windows(text)
     log.debug("Knowledge pipeline: %d windows from %d chars", len(windows), len(text))
@@ -378,13 +386,19 @@ async def extract_and_store_knowledge(
             log.exception("Failed to persist proposition: %s", prop.text[:60])
             continue
 
-        if prop.type == PropositionType.OPINION and prop.key_concepts:
+        combined = abs(prop.sentiment) * prop.confidence
+        if (
+            stage_opinions
+            and prop.type == PropositionType.OPINION
+            and prop.key_concepts
+            and combined >= 0.15
+        ):
             topic = prop.key_concepts[0]
-            direction = 1.0 if prop.sentiment >= 0 else -1.0
+            direction = 1.0 if prop.sentiment > 0 else -1.0
             sponge.stage_opinion_update(
                 topic=topic,
                 direction=direction,
-                magnitude=abs(prop.sentiment) * prop.confidence * 0.3,
+                magnitude=combined * 0.3,
                 cooling_period=2,
                 provenance=f"knowledge_extraction: {prop.text[:80]}",
             )

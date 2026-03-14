@@ -88,6 +88,23 @@ _UTILITY_NOISE_DELTA: Final = -0.05
 # _NO_UPDATE_REASONING frozenset + manipulative check — they never reach here.
 MAX_SINGLE_UPDATE_MAGNITUDE: Final[float] = 0.25
 
+# Minimum ESS score required for empirical-evidence personality updates (insight
+# extraction, belief staging, provenance opinion updates).
+# Chosen to block bare authority claims (~0.08) and weak popularity surveys (~0.28)
+# while allowing genuine empirical arguments (~0.35+).
+MIN_ESS_FOR_EMPIRICAL_UPDATE: Final[float] = 0.30
+
+# Minimum ESS score for logical_argument insight extraction. Lower than the
+# empirical threshold to allow principled reasoning to shape beliefs, but not
+# so low that one-liner fallacies embedded in manipulative messages qualify.
+MIN_ESS_FOR_LOGICAL_INSIGHT: Final[float] = 0.25
+
+# Reasoning types whose coherent structure justifies belief updates at a lower
+# (not zero) score threshold than empirical evidence.
+_SCORE_EXEMPT_REASONING: Final = frozenset({
+    ReasoningType.LOGICAL_ARGUMENT,
+})
+
 
 class ReflectionTrigger(StrEnum):
     """Reflection execution mode determined by interaction dynamics."""
@@ -288,7 +305,7 @@ class SonalityAgent:
         split_agent = SplitQueryAgent(dual_store, graph)
         consolidation = ConsolidationEngine(graph)
         forgetting = ForgettingEngine(graph, dual_store)
-        semantic_worker = SemanticIngestionWorker(db.pg_pool, embedder)
+        semantic_worker = SemanticIngestionWorker(config.POSTGRES_URL, embedder)
         semantic_worker.start()
         # Restore last episode UID for temporal linking
         last_uid = await graph.get_last_episode_uid()
@@ -640,20 +657,6 @@ class SonalityAgent:
             content = f"User: {user_message}\nAssistant: {agent_response}\n{ess_line}"
             self._semantic_worker.enqueue(episode_uid, content)
 
-        # Knowledge proposition extraction (inline, gated by ESS knowledge_density)
-        if episode_uid:
-            self._extract_knowledge(user_message, agent_response, ess, episode_uid)
-            # Normalize topics in freshly-staged knowledge updates (same LLM canon logic as ESS topics)
-            self._normalize_staged_topics()
-
-        # Persist STM to PostgreSQL
-        try:
-            self._run_async(self._stm.persist(self._db.pg_pool))
-        except Exception:
-            log.debug("STM persistence failed", exc_info=True)
-
-        self.sponge.interaction_count += 1
-
         # Manipulative/invalid interactions should not mutate personality state.
         # debunked_claim: conclusively refuted claims must never update beliefs.
         # social_pressure / emotional_appeal: coercive but no evidential content.
@@ -673,6 +676,35 @@ class SonalityAgent:
                 ess.reasoning_type,
                 ess.score,
             )
+
+        # Knowledge proposition extraction (inline, gated by ESS knowledge_density).
+        # Facts are stored regardless, but opinion staging requires:
+        # - non-manipulative reasoning type, AND
+        # - either a logical argument (score-exempt) or ESS score above the threshold.
+        if episode_uid:
+            self._extract_knowledge(
+                user_message, agent_response, ess, episode_uid,
+                stage_opinions=(
+                    not manipulative
+                    and (
+                        (
+                            ess.reasoning_type in _SCORE_EXEMPT_REASONING
+                            and ess.score >= MIN_ESS_FOR_LOGICAL_INSIGHT
+                        )
+                        or ess.score >= MIN_ESS_FOR_EMPIRICAL_UPDATE
+                    )
+                ),
+            )
+            # Normalize topics in freshly-staged knowledge updates (same LLM canon logic as ESS topics)
+            self._normalize_staged_topics()
+
+        # Persist STM to PostgreSQL
+        try:
+            self._run_async(self._stm.persist(self._db.pg_pool))
+        except Exception:
+            log.debug("STM persistence failed", exc_info=True)
+
+        self.sponge.interaction_count += 1
 
         if not manipulative:
             committed = self.sponge.apply_due_staged_updates()
@@ -712,6 +744,12 @@ class SonalityAgent:
         if not manipulative:
             self._extract_insight(user_message, agent_response, ess)
             self._maybe_reflect()
+        else:
+            log.info(
+                "Deferring insight + reflection (manipulative turn #%d, type=%s)",
+                self.sponge.interaction_count,
+                ess.reasoning_type,
+            )
         self._log_health_event()
 
         self.sponge.save(config.SPONGE_FILE, config.SPONGE_HISTORY_DIR)
@@ -753,15 +791,27 @@ class SonalityAgent:
             lower = raw.strip().lower()
             if lower in self._topic_canon_cache:
                 result.append(self._topic_canon_cache[lower])
-            elif not existing or lower in existing:
+                continue
+            # Cheap local normalization: treat hyphens as spaces for matching
+            dehyphenated = lower.replace("-", " ")
+            if lower in existing:
+                self._topic_canon_cache[lower] = lower
+                result.append(lower)
+            elif dehyphenated != lower and dehyphenated in existing:
+                self._topic_canon_cache[lower] = dehyphenated
+                log.debug("Topic hyphen-normalized: '%s' → '%s'", lower, dehyphenated)
+                result.append(dehyphenated)
+            elif not existing:
                 self._topic_canon_cache[lower] = lower
                 result.append(lower)
             else:
                 uncached.append(lower)
 
         if uncached:
+            # Include new topics in the existing set so they can dedup against each other
+            all_candidates = sorted(existing | set(uncached))
             prompt = TOPIC_CANONICALIZATION_PROMPT.format(
-                existing=json.dumps(sorted(existing)),
+                existing=json.dumps(all_candidates),
                 new_topics=json.dumps(uncached),
             )
             llm_result = llm_call(
@@ -797,13 +847,31 @@ class SonalityAgent:
                 update.topic = mapped
 
     def _extract_knowledge(
-        self, user_message: str, agent_response: str, ess: ESSResult, episode_uid: str
+        self,
+        user_message: str,
+        agent_response: str,
+        ess: ESSResult,
+        episode_uid: str,
+        *,
+        stage_opinions: bool = True,
     ) -> None:
-        """Extract and store knowledge propositions when ESS signals learnable content."""
+        """Extract and store knowledge propositions when ESS signals learnable content.
+
+        Args:
+            stage_opinions: If False, facts are still stored but opinion-type
+                propositions do not generate staged belief updates. Should be
+                False for manipulative turns, bare authority claims, or weak
+                empirical evidence (score below MIN_ESS_FOR_EMPIRICAL_UPDATE)
+                unless the reasoning type is score-exempt (e.g. logical_argument).
+        """
         if ess.knowledge_density == KnowledgeDensity.NONE:
             log.debug("Knowledge extraction skipped: density=NONE")
             return
-        log.debug("Knowledge extraction starting: density=%s", ess.knowledge_density)
+        log.debug(
+            "Knowledge extraction starting: density=%s stage_opinions=%s",
+            ess.knowledge_density,
+            stage_opinions,
+        )
         text = f"User: {user_message}\nAssistant: {agent_response}"
         try:
             stored = self._run_async(
@@ -813,6 +881,7 @@ class SonalityAgent:
                     pg_pool=self._db.pg_pool,
                     embedder=self._embedder,
                     sponge=self.sponge,
+                    stage_opinions=stage_opinions,
                 )
             )
             if stored:
@@ -943,14 +1012,21 @@ class SonalityAgent:
     ) -> bool:
         """Return whether ESS permits a personality update path.
 
-        Gates on the LLM's semantic classification of reasoning type rather than
-        a hardcoded score threshold. The LLM already decided whether the argument
-        is substantive — we trust that classification.
+        Reasoning types in _NO_UPDATE_REASONING are always blocked.
+        For all other types a minimum score gate of MIN_ESS_FOR_EMPIRICAL_UPDATE
+        applies. Use _ess_allows_insight_update for paths where logical coherence
+        justifies updates even at low ESS scores.
         """
         if require_topics and not ess.topics:
             return False
         if ess.reasoning_type in self._NO_UPDATE_REASONING:
             log.info("Skipping %s: reasoning_type=%s is non-substantive", update_kind, ess.reasoning_type)
+            return False
+        if ess.score < MIN_ESS_FOR_EMPIRICAL_UPDATE:
+            log.info(
+                "Skipping %s: score=%.3f below min %.2f (type=%s)",
+                update_kind, ess.score, MIN_ESS_FOR_EMPIRICAL_UPDATE, ess.reasoning_type,
+            )
             return False
         reliable = (
             ess.default_severity not in {"missing", "exception"}
@@ -963,6 +1039,38 @@ class SonalityAgent:
             update_kind, ess.default_severity, ess.defaulted_fields,
         )
         return False
+
+    def _ess_allows_insight_update(self, ess: ESSResult) -> bool:
+        """Like _ess_allows_update but with a lower threshold for logical arguments.
+
+        Principled reasoning shapes personality even below the empirical evidence
+        threshold, but a floor of MIN_ESS_FOR_LOGICAL_INSIGHT still applies to
+        prevent one-liner fallacies embedded in manipulative messages from
+        qualifying as insight-worthy logical arguments.
+        """
+        if ess.reasoning_type in self._NO_UPDATE_REASONING:
+            return False
+        min_score = (
+            MIN_ESS_FOR_LOGICAL_INSIGHT
+            if ess.reasoning_type in _SCORE_EXEMPT_REASONING
+            else MIN_ESS_FOR_EMPIRICAL_UPDATE
+        )
+        if ess.score < min_score:
+            log.info(
+                "Skipping insight: score=%.3f below min %.2f (type=%s)",
+                ess.score, min_score, ess.reasoning_type,
+            )
+            return False
+        reliable = (
+            ess.default_severity not in {"missing", "exception"}
+            and not any(field in CRITICAL_ESS_DEFAULT_FIELDS for field in ess.defaulted_fields)
+        )
+        if not reliable:
+            log.info(
+                "Skipping insight due to ESS fallback defaults (severity=%s fields=%s)",
+                ess.default_severity, ess.defaulted_fields,
+            )
+        return reliable
 
     def _stage_topic_opinion_update(
         self,
@@ -1007,10 +1115,10 @@ class SonalityAgent:
         """Use LLM-based evidence assessment with episode provenance links."""
         if not self._ess_allows_update(ess, update_kind="provenance opinion update", require_topics=True):
             return
-        content = (
-            f"User: {user_message}\nAssistant: {agent_response}\n"
-            f"ESS summary: {ess.summary}\nESS score: {ess.score:.2f}"
-        )
+        # Use only the user's message so the LLM assesses the USER's claim, not
+        # the agent's rebuttal. The agent's response may debunk the claim but that
+        # doesn't mean the agent has a negative belief about the domain itself.
+        content = f"User: {user_message}\nESS summary: {ess.summary}\nESS score: {ess.score:.2f}"
         fallback_direction = ess.opinion_direction.sign
 
         for topic in ess.topics:
@@ -1064,7 +1172,7 @@ class SonalityAgent:
         Avoids lossy per-interaction full snapshot rewrites (ABBEL 2025: belief
         bottleneck). Snapshot only changes during reflection (Park et al. 2023).
         """
-        if not self._ess_allows_update(ess, update_kind="insight extraction"):
+        if not self._ess_allows_insight_update(ess):
             return
         try:
             insight = extract_insight(
