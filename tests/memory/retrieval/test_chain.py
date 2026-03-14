@@ -10,7 +10,9 @@ from sonality.memory.retrieval.chain import ChainOfQueryAgent
 
 
 class _FakeStore:
-    async def hybrid_search(self, query: str, *, top_k: int = 10, rrf_k: int = 60) -> list[tuple[str, str, float]]:
+    async def hybrid_search(
+        self, query: str, *, top_k: int = 10, rrf_k: int = 60
+    ) -> list[tuple[str, str, float]]:
         _ = (query, top_k, rrf_k)
         return [("d1", "ep-1", 0.1)]
 

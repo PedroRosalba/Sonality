@@ -54,6 +54,7 @@ def db_containers(use_containers: bool) -> Generator[dict[str, Any] | None, None
     log.info("Starting testcontainers for isolated database testing...")
     with both_containers() as config:
         import sonality.config as cfg
+
         patch_config_for_containers(cfg, config)
         yield {
             "postgres_url": config.postgres_url,
@@ -71,6 +72,7 @@ def clear_db_between_tests(
     yield
     if use_containers and db_containers:
         from tests.containers import clear_databases
+
         clear_databases(
             db_containers["postgres_url"],
             db_containers["neo4j_url"],

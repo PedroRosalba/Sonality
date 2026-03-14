@@ -39,6 +39,7 @@ pytestmark = pytest.mark.live
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+
 def _elapsed(start: float) -> str:
     return f"{time.perf_counter() - start:.1f}s"
 
@@ -54,43 +55,52 @@ def _cosine(a: list[float], b: list[float]) -> float:
 # P0 — Parser robustness (offline — no LLM, no live mark)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.parametrize("text,expected_key", [
-    # Direct JSON
-    ('{"score": 0.8, "label": "good"}', "score"),
-    # Markdown fences
-    ('```json\n{"score": 0.9}\n```', "score"),
-    # Prose before
-    ("Here is the result:\n{\"score\": 0.7}", "score"),
-    # Prose after
-    ('{"score": 0.6}\nLet me know if you need anything.', "score"),
-    # Two JSON blocks — last one wins
-    ('First try: {"score": 0.1}\nCorrected: {"score": 0.95}', "score"),
-    # Nested braces inside string value
-    ('{"description": "uses {curly} braces", "value": 42}', "description"),
-    # Escaped quotes inside strings
-    ('{"note": "he said \\"hi\\"", "ok": true}', "note"),
-    # Pretty-printed multiline
-    ('{\n  "reasoning_type": "empirical_data",\n  "score": 0.8\n}', "reasoning_type"),
-    # Extra whitespace and blank lines
-    ('\n\n  {"field": "value"}  \n\n', "field"),
-])
+
+@pytest.mark.parametrize(
+    "text,expected_key",
+    [
+        # Direct JSON
+        ('{"score": 0.8, "label": "good"}', "score"),
+        # Markdown fences
+        ('```json\n{"score": 0.9}\n```', "score"),
+        # Prose before
+        ('Here is the result:\n{"score": 0.7}', "score"),
+        # Prose after
+        ('{"score": 0.6}\nLet me know if you need anything.', "score"),
+        # Two JSON blocks — last one wins
+        ('First try: {"score": 0.1}\nCorrected: {"score": 0.95}', "score"),
+        # Nested braces inside string value
+        ('{"description": "uses {curly} braces", "value": 42}', "description"),
+        # Escaped quotes inside strings
+        ('{"note": "he said \\"hi\\"", "ok": true}', "note"),
+        # Pretty-printed multiline
+        ('{\n  "reasoning_type": "empirical_data",\n  "score": 0.8\n}', "reasoning_type"),
+        # Extra whitespace and blank lines
+        ('\n\n  {"field": "value"}  \n\n', "field"),
+    ],
+)
 def test_extract_last_json_object_parametric(text: str, expected_key: str) -> None:
     """extract_last_json_object handles all LLM output patterns the model might emit."""
     from sonality.provider import extract_last_json_object
+
     result = extract_last_json_object(text)
     assert result is not None, f"Returned None for: {text!r}"
     assert expected_key in result, f"Key {expected_key!r} missing from {result}"
 
 
-@pytest.mark.parametrize("text", [
-    "",           # empty
-    "   ",        # whitespace
-    "no json here",          # prose only
-    '["a", "b"]',            # array — not an object
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "",  # empty
+        "   ",  # whitespace
+        "no json here",  # prose only
+        '["a", "b"]',  # array — not an object
+    ],
+)
 def test_extract_last_json_object_returns_none_for_invalid(text: str) -> None:
     """extract_last_json_object returns None when no valid object is present."""
     from sonality.provider import extract_last_json_object
+
     assert extract_last_json_object(text) is None, f"Should return None for: {text!r}"
 
 
@@ -104,7 +114,7 @@ def test_parse_json_object_last_block_wins() -> None:
 
 def test_parse_json_object_strips_fences() -> None:
     """Markdown-fenced JSON is extracted correctly."""
-    text = "```json\n{\"key\": \"value\", \"num\": 42}\n```"
+    text = '```json\n{"key": "value", "num": 42}\n```'
     result = parse_json_object(text)
     assert result == {"key": "value", "num": 42}
 
@@ -112,6 +122,7 @@ def test_parse_json_object_strips_fences() -> None:
 # ---------------------------------------------------------------------------
 # L0 — Endpoint connectivity
 # ---------------------------------------------------------------------------
+
 
 class TestL0Connectivity:
     """Verify the two endpoints are reachable before anything else."""
@@ -145,6 +156,7 @@ class TestL0Connectivity:
 # ---------------------------------------------------------------------------
 # L1 — Raw response quality
 # ---------------------------------------------------------------------------
+
 
 class TestL1RawResponse:
     """Verify the LLM returns usable text and embeddings have the right shape."""
@@ -186,10 +198,9 @@ class TestL1RawResponse:
         print(f"\n  raw={result.text!r}  ({elapsed})")
         # Tolerant parse — strip markdown fences and surrounding prose
         from sonality.provider import parse_json_object
+
         parsed = parse_json_object(result.text)
-        assert parsed, (
-            f"No JSON object found in LLM response.\nraw={result.text!r}"
-        )
+        assert parsed, f"No JSON object found in LLM response.\nraw={result.text!r}"
 
     def test_embedding_returns_correct_dimensions(self) -> None:
         """Embedding a short sentence returns the configured dimension count."""
@@ -219,6 +230,7 @@ class TestL1RawResponse:
 # ---------------------------------------------------------------------------
 # L2 — Structured parsing + ESS
 # ---------------------------------------------------------------------------
+
 
 class _SimpleSchema(BaseModel):
     sentiment: str
@@ -250,9 +262,7 @@ class TestL2StructuredParsing:
         assert result.value.sentiment in {"positive", "negative", "neutral"}, (
             f"Unexpected sentiment: {result.value.sentiment!r}"
         )
-        assert 0.0 <= result.value.score <= 1.0, (
-            f"Score out of range: {result.value.score}"
-        )
+        assert 0.0 <= result.value.score <= 1.0, f"Score out of range: {result.value.score}"
 
     def test_ess_strong_argument_scores_high(self) -> None:
         """A well-reasoned empirical argument should produce ESS > 0.4."""
@@ -330,7 +340,9 @@ class TestL2StructuredParsing:
         )
         # debunked_claim or anecdotal are both acceptable; the key is the score being low
         assert result.reasoning_type in {
-            ReasoningType.DEBUNKED_CLAIM, ReasoningType.ANECDOTAL, ReasoningType.SOCIAL_PRESSURE
+            ReasoningType.DEBUNKED_CLAIM,
+            ReasoningType.ANECDOTAL,
+            ReasoningType.SOCIAL_PRESSURE,
         }, (
             f"reasoning_type={result.reasoning_type} — expected debunked_claim, anecdotal, or social_pressure"
         )
@@ -339,6 +351,7 @@ class TestL2StructuredParsing:
 # ---------------------------------------------------------------------------
 # L2r — Repeatability (same prompts, 3 calls, measure consistency)
 # ---------------------------------------------------------------------------
+
 
 class TestL2rRepeatability:
     """Run the same structured prompts multiple times to quantify parse consistency.
@@ -371,6 +384,7 @@ class TestL2rRepeatability:
 
     def test_simple_two_field_schema_repeatable(self) -> None:
         """A minimal 2-field schema should parse on every call (3/3)."""
+
         class _TwoField(BaseModel):
             sentiment: str
             score: float
@@ -388,7 +402,7 @@ class TestL2rRepeatability:
 
         print(f"\n  {ok}/{total} successful  ({elapsed})")
         for i, raw in enumerate(raws):
-            print(f"    run {i+1}: {raw!r}")
+            print(f"    run {i + 1}: {raw!r}")
 
         assert ok == total, (
             f"Only {ok}/{total} runs parsed successfully — model output is inconsistent"
@@ -396,6 +410,7 @@ class TestL2rRepeatability:
 
     def test_five_field_schema_repeatable(self) -> None:
         """A 5-field schema with enums should parse ≥2/3 runs."""
+
         class _FiveField(BaseModel):
             category: str
             depth: str
@@ -404,6 +419,7 @@ class TestL2rRepeatability:
             reasoning: str = ""
 
         from sonality.llm.prompts import QUERY_ROUTING_PROMPT
+
         prompt = QUERY_ROUTING_PROMPT.format(
             query="What were the key arguments we discussed about nuclear energy?",
             context="Prior conversation about energy policy and climate change.",
@@ -414,16 +430,16 @@ class TestL2rRepeatability:
             prompt=prompt,
             response_model=_FiveField,
             fallback=_FiveField(
-                category="SIMPLE", depth="MINIMAL",
-                temporal_expansion="NO_EXPAND", semantic_memory="SKIP",
+                category="SIMPLE",
+                depth="MINIMAL",
+                temporal_expansion="NO_EXPAND",
+                semantic_memory="SKIP",
             ),
         )
         elapsed = _elapsed(t)
 
         print(f"\n  {ok}/{total} successful  ({elapsed})")
-        assert ok >= 2, (
-            f"Only {ok}/{total} runs parsed — 5-field schema not reliable enough"
-        )
+        assert ok >= 2, f"Only {ok}/{total} runs parsed — 5-field schema not reliable enough"
 
     def test_insight_prompt_consistent_decision_format(self) -> None:
         """INSIGHT_PROMPT decision field should be valid on every call (3/3)."""
@@ -453,6 +469,7 @@ class TestL2rRepeatability:
 # ---------------------------------------------------------------------------
 # L3 — Memory primitives (requires Postgres + Ollama)
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture
 def pg_url() -> str:
@@ -496,11 +513,13 @@ class TestL3MemoryPrimitives:
         """Two semantically similar sentences should be closer than a dissimilar one."""
         t = time.perf_counter()
         embedder = ExternalEmbedder()
-        vecs = embedder.embed_documents([
-            "The cat sat on the mat.",        # anchor
-            "A kitten rested on a rug.",       # similar
-            "The stock market fell 3% today.", # dissimilar
-        ])
+        vecs = embedder.embed_documents(
+            [
+                "The cat sat on the mat.",  # anchor
+                "A kitten rested on a rug.",  # similar
+                "The stock market fell 3% today.",  # dissimilar
+            ]
+        )
         elapsed = _elapsed(t)
 
         sim_close = _cosine(vecs[0], vecs[1])
@@ -556,6 +575,7 @@ class TestL3MemoryPrimitives:
 # ---------------------------------------------------------------------------
 # L2x — Per-prompt parsing (each prompt template tested in isolation)
 # ---------------------------------------------------------------------------
+
 
 class TestL2xPerPromptParsing:
     """Test every prompt→parse pipeline individually.
@@ -657,7 +677,9 @@ class TestL2xPerPromptParsing:
             f"\n  success={result.success}  decision={result.value.insight_decision}  "
             f"text={result.value.insight_text[:60]!r}  ({elapsed})"
         )
-        assert result.success, f"INSIGHT_PROMPT parse failed: {result.error}\nraw: {result.raw_text!r}"
+        assert result.success, (
+            f"INSIGHT_PROMPT parse failed: {result.error}\nraw: {result.raw_text!r}"
+        )
         assert result.value.insight_decision in {"EXTRACT", "SKIP"}, (
             f"Unexpected decision: {result.value.insight_decision!r}"
         )
@@ -683,10 +705,11 @@ class TestL2xPerPromptParsing:
         chunks = result.value.chunks
         first_text = chunks[0].text[:50] if chunks else ""
         print(
-            f"\n  success={result.success}  chunks={len(chunks)}  "
-            f"first={first_text!r}  ({elapsed})"
+            f"\n  success={result.success}  chunks={len(chunks)}  first={first_text!r}  ({elapsed})"
         )
-        assert result.success, f"CHUNKING_PROMPT parse failed: {result.error}\nraw: {result.raw_text!r}"
+        assert result.success, (
+            f"CHUNKING_PROMPT parse failed: {result.error}\nraw: {result.raw_text!r}"
+        )
         assert len(chunks) >= 1, "Expected at least 1 chunk"
         assert all(c.text.strip() for c in chunks), "Some chunks have empty text"
         assert all(c.key_concept.strip() for c in chunks), "Some chunks have empty key_concept"
@@ -713,8 +736,10 @@ class TestL2xPerPromptParsing:
             prompt=prompt,
             response_model=RoutingResponse,
             fallback=RoutingResponse(
-                category="SIMPLE", depth="MINIMAL",
-                temporal_expansion="NO_EXPAND", semantic_memory="SKIP",
+                category="SIMPLE",
+                depth="MINIMAL",
+                temporal_expansion="NO_EXPAND",
+                semantic_memory="SKIP",
             ),
         )
         elapsed = _elapsed(t)
@@ -723,9 +748,16 @@ class TestL2xPerPromptParsing:
             f"\n  success={result.success}  category={result.value.category!r}  "
             f"depth={result.value.depth!r}  ({elapsed})"
         )
-        assert result.success, f"QUERY_ROUTING parse failed: {result.error}\nraw: {result.raw_text!r}"
+        assert result.success, (
+            f"QUERY_ROUTING parse failed: {result.error}\nraw: {result.raw_text!r}"
+        )
         assert result.value.category in {
-            "NONE", "SIMPLE", "TEMPORAL", "MULTI_ENTITY", "AGGREGATION", "BELIEF_QUERY"
+            "NONE",
+            "SIMPLE",
+            "TEMPORAL",
+            "MULTI_ENTITY",
+            "AGGREGATION",
+            "BELIEF_QUERY",
         }, f"Invalid category: {result.value.category!r}"
         assert result.value.depth in {"MINIMAL", "MODERATE", "DEEP"}, (
             f"Invalid depth: {result.value.depth!r}"
@@ -760,7 +792,9 @@ class TestL2xPerPromptParsing:
             f"\n  success={result.success}  decision={result.value.boundary_decision!r}  "
             f"confidence={result.value.confidence:.2f}  ({elapsed})"
         )
-        assert result.success, f"BOUNDARY_DETECTION parse failed: {result.error}\nraw: {result.raw_text!r}"
+        assert result.success, (
+            f"BOUNDARY_DETECTION parse failed: {result.error}\nraw: {result.raw_text!r}"
+        )
         assert result.value.boundary_decision in {"BOUNDARY", "CONTINUE"}, (
             f"Invalid decision: {result.value.boundary_decision!r}"
         )
@@ -797,10 +831,10 @@ class TestL2xPerPromptParsing:
         )
         elapsed = _elapsed(t)
 
-        print(
-            f"\n  success={result.success}  trigger={result.value.trigger!r}  ({elapsed})"
+        print(f"\n  success={result.success}  trigger={result.value.trigger!r}  ({elapsed})")
+        assert result.success, (
+            f"REFLECTION_GATE parse failed: {result.error}\nraw: {result.raw_text!r}"
         )
-        assert result.success, f"REFLECTION_GATE parse failed: {result.error}\nraw: {result.raw_text!r}"
         assert result.value.trigger in {"SKIP", "PERIODIC", "EVENT_DRIVEN"}, (
             f"Invalid trigger: {result.value.trigger!r}"
         )
@@ -836,7 +870,9 @@ class TestL2xPerPromptParsing:
             f"\n  success={result.success}  action={result.value.action!r}  "
             f"confidence={result.value.new_confidence:.2f}  ({elapsed})"
         )
-        assert result.success, f"BELIEF_DECAY parse failed: {result.error}\nraw: {result.raw_text!r}"
+        assert result.success, (
+            f"BELIEF_DECAY parse failed: {result.error}\nraw: {result.raw_text!r}"
+        )
         assert result.value.action in {"RETAIN", "DECAY", "FORGET"}, (
             f"Invalid action: {result.value.action!r}"
         )
@@ -845,6 +881,7 @@ class TestL2xPerPromptParsing:
 # ---------------------------------------------------------------------------
 # L3x — Memory store + retrieve (full DualEpisodeStore pipeline)
 # ---------------------------------------------------------------------------
+
 
 class TestL3xMemoryStoreRetrieve:
     """Test the full episode store → retrieve pipeline with real DB + embedding."""
@@ -907,7 +944,13 @@ class TestL3xMemoryStoreRetrieve:
                 conn.execute(
                     "INSERT INTO derivatives (uid, episode_uid, text, key_concept, embedding) "
                     "VALUES (%s, %s, %s, %s, %s::vector)",
-                    (d.node.uid, d.node.source_episode_uid, d.node.text, d.node.key_concept, d.embedding),
+                    (
+                        d.node.uid,
+                        d.node.source_episode_uid,
+                        d.node.text,
+                        d.node.key_concept,
+                        d.embedding,
+                    ),
                 )
 
             query_vec = embedder.embed_query(query)
@@ -929,10 +972,8 @@ class TestL3xMemoryStoreRetrieve:
 
         assert rows, "Vector search returned no results"
         assert rows[0][0] == ep_uid, (
-            f"Top result is ep={rows[0][0]!r}, expected {ep_uid!r}. "
-            f"Similarity={rows[0][2]:.4f}"
+            f"Top result is ep={rows[0][0]!r}, expected {ep_uid!r}. Similarity={rows[0][2]:.4f}"
         )
         assert rows[0][2] >= 0.6, (
             f"Top similarity {rows[0][2]:.4f} too low — retrieval quality concern"
         )
-

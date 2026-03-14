@@ -78,5 +78,3 @@ def test_neutral_sentiment_opinion_does_not_stage_update() -> None:
     assert len(s.staged_opinion_updates) == 0, (
         "Neutral-sentiment opinion (sentiment=0.0) must not stage any belief update"
     )
-
-

@@ -11,6 +11,7 @@ Stages (run in order, each more complex):
 Each test prints a rich DB snapshot so failures are diagnosable from logs alone.
 Run with: uv run pytest tests/test_agent_health.py -v -s -m live --tb=short
 """
+
 from __future__ import annotations
 
 import logging
@@ -33,6 +34,7 @@ pytestmark = pytest.mark.live
 # Session-scoped DB reset — ensures clean state even if two test runs overlap
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session", autouse=True)
 def reset_databases() -> None:
     """Wipe Neo4j and PostgreSQL before any tests run in this session."""
@@ -52,6 +54,7 @@ def reset_databases() -> None:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _elapsed(start: float) -> str:
     return f"{time.perf_counter() - start:.1f}s"
 
@@ -62,7 +65,9 @@ def _db_snapshot(label: str) -> dict[str, Any]:
 
     with psycopg.connect(config.POSTGRES_URL) as conn:
         snap["pg_derivatives"] = conn.execute("SELECT COUNT(*) FROM derivatives").fetchone()[0]
-        snap["pg_semantic_features"] = conn.execute("SELECT COUNT(*) FROM semantic_features").fetchone()[0]
+        snap["pg_semantic_features"] = conn.execute(
+            "SELECT COUNT(*) FROM semantic_features"
+        ).fetchone()[0]
         snap["pg_distinct_episodes"] = conn.execute(
             "SELECT COUNT(DISTINCT episode_uid) FROM derivatives"
         ).fetchone()[0]
@@ -94,13 +99,15 @@ def _db_snapshot(label: str) -> dict[str, Any]:
                 "RETURN e.uid, e.summary, collect(t.name) as topics"
             ).data()
             snap["neo4j_recent_episodes"] = [
-                {"uid": r["e.uid"][:12], "summary": (r["e.summary"] or "")[:80], "topics": r["topics"]}
+                {
+                    "uid": r["e.uid"][:12],
+                    "summary": (r["e.summary"] or "")[:80],
+                    "topics": r["topics"],
+                }
                 for r in eps
             ]
             # Belief nodes (topic only — position/confidence stored in sponge, not in graph)
-            beliefs = s.run(
-                "MATCH (b:Belief) RETURN b.topic ORDER BY b.topic LIMIT 10"
-            ).data()
+            beliefs = s.run("MATCH (b:Belief) RETURN b.topic ORDER BY b.topic LIMIT 10").data()
             snap["neo4j_beliefs"] = [{"topic": b["b.topic"]} for b in beliefs]
     finally:
         driver.close()
@@ -108,16 +115,22 @@ def _db_snapshot(label: str) -> dict[str, Any]:
     # Pretty print the snapshot
     beliefs_list: list[dict[str, str]] = snap.pop("neo4j_beliefs", [])  # type: ignore[assignment]
     snap["neo4j_beliefs_count"] = beliefs_list
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"DB SNAPSHOT: {label}")
-    print(f"  Postgres: derivatives={snap['pg_derivatives']} "
-          f"semantic_features={snap['pg_semantic_features']} "
-          f"distinct_episodes={snap['pg_distinct_episodes']}")
-    print(f"  Neo4j: episodes={snap['neo4j_episodes']} derivatives={snap['neo4j_derivatives']} "
-          f"topics={snap['neo4j_topics']} beliefs={len(beliefs_list)} "
-          f"segments={snap['neo4j_segments']}")
-    print(f"  Neo4j relations: SUPPORTS={snap['neo4j_supports_rel']} "
-          f"CONTRADICTS={snap['neo4j_contradicts_rel']}")
+    print(
+        f"  Postgres: derivatives={snap['pg_derivatives']} "
+        f"semantic_features={snap['pg_semantic_features']} "
+        f"distinct_episodes={snap['pg_distinct_episodes']}"
+    )
+    print(
+        f"  Neo4j: episodes={snap['neo4j_episodes']} derivatives={snap['neo4j_derivatives']} "
+        f"topics={snap['neo4j_topics']} beliefs={len(beliefs_list)} "
+        f"segments={snap['neo4j_segments']}"
+    )
+    print(
+        f"  Neo4j relations: SUPPORTS={snap['neo4j_supports_rel']} "
+        f"CONTRADICTS={snap['neo4j_contradicts_rel']}"
+    )
     if beliefs_list:
         print(f"  Beliefs tracked: {[b['topic'] for b in beliefs_list[:8]]}")
     if snap.get("neo4j_recent_episodes"):
@@ -128,23 +141,27 @@ def _db_snapshot(label: str) -> dict[str, Any]:
         print("  Recent derivatives (pgvector):")
         for d in snap["pg_recent_derivatives"][:3]:
             print(f"    ep={d['ep']} concept={d['concept']!r} | {d['text'][:60]}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     return snap
 
 
 def _sponge_snapshot(label: str, sponge: Any) -> None:
     """Print current sponge state summary."""
-    print(f"\n{'─'*60}")
+    print(f"\n{'─' * 60}")
     print(f"SPONGE STATE: {label}")
     print(f"  interactions: {sponge.interaction_count}")
     print(f"  snapshot ({len(sponge.snapshot)} chars): {sponge.snapshot[:200]!r}...")
-    print(f"  opinion_vectors ({len(sponge.opinion_vectors)}): {dict(list(sponge.opinion_vectors.items())[:8])}")
+    print(
+        f"  opinion_vectors ({len(sponge.opinion_vectors)}): {dict(list(sponge.opinion_vectors.items())[:8])}"
+    )
     print(f"  staged_updates: {len(sponge.staged_opinion_updates)}")
     print(f"  pending_insights: {len(sponge.pending_insights)}")
     print(f"  disagreement_rate: {sponge.behavioral_signature.disagreement_rate:.3f}")
     if sponge.recent_shifts:
-        print(f"  recent_shifts: {[(s.description[:50], f'{s.magnitude:.3f}') for s in sponge.recent_shifts[-3:]]}")
-    print(f"{'─'*60}")
+        print(
+            f"  recent_shifts: {[(s.description[:50], f'{s.magnitude:.3f}') for s in sponge.recent_shifts[-3:]]}"
+        )
+    print(f"{'─' * 60}")
 
 
 @pytest.fixture(scope="module")
@@ -159,6 +176,7 @@ def agent(tmp_path_factory: pytest.TempPathFactory) -> Any:
         REFLECTION_EVERY=8,  # Fire reflection within the ~9-interaction S1-S6 window
     ):
         from sonality.agent import SonalityAgent
+
         a = SonalityAgent()
         yield a
         a.shutdown()
@@ -167,6 +185,7 @@ def agent(tmp_path_factory: pytest.TempPathFactory) -> Any:
 # ---------------------------------------------------------------------------
 # S1 — Clean start verification
 # ---------------------------------------------------------------------------
+
 
 class TestS1CleanStart:
     """Verify DB is empty before any interactions."""
@@ -178,7 +197,9 @@ class TestS1CleanStart:
             assert n == 0, f"Expected empty derivatives table, got {n} rows — run DB wipe first"
 
     def test_neo4j_empty(self) -> None:
-        driver = GraphDatabase.driver(config.NEO4J_URL, auth=(config.NEO4J_USER, config.NEO4J_PASSWORD))
+        driver = GraphDatabase.driver(
+            config.NEO4J_URL, auth=(config.NEO4J_USER, config.NEO4J_PASSWORD)
+        )
         try:
             with driver.session() as s:
                 n = s.run("MATCH (n) RETURN count(n) as cnt").single()["cnt"]
@@ -213,8 +234,10 @@ class TestS2EpisodeStorage:
 
         print(f"\n  response[:150]={response[:150]!r}")
         print(f"  elapsed={elapsed}")
-        print(f"  ESS: score={agent.last_ess.score:.3f} type={agent.last_ess.reasoning_type} "
-              f"topics={list(agent.last_ess.topics)}")
+        print(
+            f"  ESS: score={agent.last_ess.score:.3f} type={agent.last_ess.reasoning_type} "
+            f"topics={list(agent.last_ess.topics)}"
+        )
 
         # Response must be non-empty
         assert response.strip(), "Agent returned empty response"
@@ -233,10 +256,12 @@ class TestS2EpisodeStorage:
 
     def test_episode_has_correct_ess_metadata(self, agent: Any) -> None:
         """The stored episode should reflect a high ESS for a data-backed argument."""
-        print(f"\n  ESS after first turn: score={agent.last_ess.score:.3f} "
-              f"type={agent.last_ess.reasoning_type} "
-              f"severity={agent.last_ess.default_severity} "
-              f"defaulted={agent.last_ess.defaulted_fields}")
+        print(
+            f"\n  ESS after first turn: score={agent.last_ess.score:.3f} "
+            f"type={agent.last_ess.reasoning_type} "
+            f"severity={agent.last_ess.default_severity} "
+            f"defaulted={agent.last_ess.defaulted_fields}"
+        )
 
         assert agent.last_ess.default_severity not in ("missing", "exception"), (
             f"ESS failed to classify — defaulted fields: {agent.last_ess.defaulted_fields}"
@@ -259,6 +284,7 @@ class TestS2EpisodeStorage:
 # S3 — ESS gating: social pressure vs strong argument
 # ---------------------------------------------------------------------------
 
+
 class TestS3ESSGating:
     """Verify ESS correctly gates weak vs strong updates."""
 
@@ -275,17 +301,22 @@ class TestS3ESSGating:
         elapsed = _elapsed(t)
         ess = agent.last_ess
 
-        print(f"\n  ESS social pressure: score={ess.score:.3f} type={ess.reasoning_type} "
-              f"dir={ess.opinion_direction} elapsed={elapsed}")
-        print(f"  staged_before={staged_before} staged_after={len(agent.sponge.staged_opinion_updates)}")
+        print(
+            f"\n  ESS social pressure: score={ess.score:.3f} type={ess.reasoning_type} "
+            f"dir={ess.opinion_direction} elapsed={elapsed}"
+        )
+        print(
+            f"  staged_before={staged_before} staged_after={len(agent.sponge.staged_opinion_updates)}"
+        )
         print(f"  response[:150]={response[:150]!r}")
 
-        assert ess.score <= 0.25, (
-            f"Social pressure ESS {ess.score:.3f} too high — expected ≤ 0.25"
-        )
-        assert ess.reasoning_type in ("social_pressure", "no_argument", "assertion_only", "emotional_appeal"), (
-            f"Expected social_pressure-type reasoning, got {ess.reasoning_type!r}"
-        )
+        assert ess.score <= 0.25, f"Social pressure ESS {ess.score:.3f} too high — expected ≤ 0.25"
+        assert ess.reasoning_type in (
+            "social_pressure",
+            "no_argument",
+            "assertion_only",
+            "emotional_appeal",
+        ), f"Expected social_pressure-type reasoning, got {ess.reasoning_type!r}"
 
     def test_empirical_argument_has_high_ess(self, agent: Any) -> None:
         """A peer-reviewed data argument should produce ESS > 0.4 and stage a belief update."""
@@ -301,9 +332,13 @@ class TestS3ESSGating:
         elapsed = _elapsed(t)
         ess = agent.last_ess
 
-        print(f"\n  ESS empirical argument: score={ess.score:.3f} type={ess.reasoning_type} "
-              f"dir={ess.opinion_direction} elapsed={elapsed}")
-        print(f"  staged_before={staged_before} staged_after={len(agent.sponge.staged_opinion_updates)}")
+        print(
+            f"\n  ESS empirical argument: score={ess.score:.3f} type={ess.reasoning_type} "
+            f"dir={ess.opinion_direction} elapsed={elapsed}"
+        )
+        print(
+            f"  staged_before={staged_before} staged_after={len(agent.sponge.staged_opinion_updates)}"
+        )
         print(f"  response[:150]={response[:150]!r}")
 
         assert ess.default_severity not in ("missing", "exception"), (
@@ -342,6 +377,7 @@ class TestS3ESSGating:
 # ---------------------------------------------------------------------------
 # S4 — Memory retrieval
 # ---------------------------------------------------------------------------
+
 
 class TestS4MemoryRetrieval:
     """Verify stored episodes are retrieved on semantically related queries."""
@@ -384,8 +420,13 @@ class TestS4MemoryRetrieval:
         # not single-word mentions which may be metacognitive self-awareness
         lower = response.lower()
         hallucination_phrases = [
-            "nuclear energy", "co2 emissions", "gco2", "12 g",
-            "france runs", "low-carbon", "baseload power",
+            "nuclear energy",
+            "co2 emissions",
+            "gco2",
+            "12 g",
+            "france runs",
+            "low-carbon",
+            "baseload power",
         ]
         leaked = [p for p in hallucination_phrases if p in lower]
         assert not leaked, (
@@ -397,6 +438,7 @@ class TestS4MemoryRetrieval:
 # ---------------------------------------------------------------------------
 # S5 — Anti-sycophancy: agent holds position under pressure
 # ---------------------------------------------------------------------------
+
 
 class TestS5AntiSycophancy:
     """Verify the agent maintains positions under repeated weak pressure."""
@@ -424,7 +466,9 @@ class TestS5AntiSycophancy:
         print(f"  position_before: {position_before}")
         print(f"  position_after: {position_after}")
 
-        nuclear_topics = [t for t in position_after if "nuclear" in t.lower() or "energy" in t.lower()]
+        nuclear_topics = [
+            t for t in position_after if "nuclear" in t.lower() or "energy" in t.lower()
+        ]
         assert nuclear_topics, (
             "No nuclear/energy topics tracked in opinion_vectors after S2-S5 — "
             f"topics present: {list(position_after.keys())}"
@@ -467,6 +511,7 @@ class TestS5AntiSycophancy:
 # S6 — Personality accumulation: snapshot and belief evolution
 # ---------------------------------------------------------------------------
 
+
 class TestS6PersonalityAccumulation:
     """Verify the sponge evolves coherently across multiple interactions."""
 
@@ -476,8 +521,10 @@ class TestS6PersonalityAccumulation:
         staged = agent.sponge.staged_opinion_updates
 
         print(f"\n  opinion_vectors ({len(ops)}): {dict(list(ops.items())[:10])}")
-        print(f"  staged_updates ({len(staged)}): "
-              f"{[(u.topic, f'{u.signed_magnitude:+.3f}') for u in staged[:5]]}")
+        print(
+            f"  staged_updates ({len(staged)}): "
+            f"{[(u.topic, f'{u.signed_magnitude:+.3f}') for u in staged[:5]]}"
+        )
         print(f"  interaction_count: {agent.sponge.interaction_count}")
 
         assert len(ops) >= 1 or len(staged) >= 1, (
@@ -533,7 +580,9 @@ class TestS6PersonalityAccumulation:
             conf = m.confidence if m else 0
             updates = m.recent_updates if m else []
             max_single = max((abs(u) for u in updates), default=0.0)
-            print(f"    {topic}: pos={pos:+.3f} conf={conf:.2f} ev={ev} max_single_update={max_single:.3f}")
+            print(
+                f"    {topic}: pos={pos:+.3f} conf={conf:.2f} ev={ev} max_single_update={max_single:.3f}"
+            )
             assert max_single <= 0.35, (
                 f"Belief on '{topic}' had single update of {max_single:.3f} — "
                 "exceeds AGM minimal change bound of 0.35"
@@ -547,6 +596,7 @@ class TestS6PersonalityAccumulation:
         reflection is now non-deferrable, so this must have fired by interaction 9.
         """
         from sonality.memory.sponge import SEED_SNAPSHOT
+
         snap = agent.sponge.snapshot
         interactions = agent.sponge.interaction_count
         print(f"\n  interactions: {interactions}")
@@ -568,6 +618,7 @@ class TestS6PersonalityAccumulation:
 # S7 — Contradiction handling and belief stability over 20 interactions
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="module")
 def agent20(tmp_path_factory: pytest.TempPathFactory) -> Any:
     """Separate agent for extended 20-interaction test."""
@@ -580,6 +631,7 @@ def agent20(tmp_path_factory: pytest.TempPathFactory) -> Any:
         REFLECTION_EVERY=8,  # Ensure reflection fires within 16-interaction S7 window
     ):
         from sonality.agent import SonalityAgent
+
         a = SonalityAgent()
         yield a
         a.shutdown()
@@ -654,7 +706,7 @@ class TestS7ExtendedEvolution:
             responses.append(response)
             ess_scores.append(ess.score)
             print(
-                f"\n  [{i+1:02d}] ESS={ess.score:.3f} ({ess.reasoning_type}) | "
+                f"\n  [{i + 1:02d}] ESS={ess.score:.3f} ({ess.reasoning_type}) | "
                 f"beliefs={len(agent20.sponge.opinion_vectors)} | "
                 f"disagree_rate={agent20.sponge.behavioral_signature.disagreement_rate:.2f}"
             )
@@ -671,12 +723,8 @@ class TestS7ExtendedEvolution:
         em_scores = [ess_scores[i] for i in empirical_msgs]
         print(f"\n  Social pressure ESS: {[f'{s:.3f}' for s in sp_scores]}")
         print(f"  Empirical ESS: {[f'{s:.3f}' for s in em_scores]}")
-        assert all(s < 0.3 for s in sp_scores), (
-            f"Social pressure msgs scored too high: {sp_scores}"
-        )
-        assert all(s > 0.2 for s in em_scores), (
-            f"Empirical msgs scored too low: {em_scores}"
-        )
+        assert all(s < 0.3 for s in sp_scores), f"Social pressure msgs scored too high: {sp_scores}"
+        assert all(s > 0.2 for s in em_scores), f"Empirical msgs scored too low: {em_scores}"
 
     def test_disagreement_rate_nonzero(self, agent20: Any) -> None:
         """After 15 interactions including social pressure, disagreement rate must be > 0."""
@@ -732,8 +780,10 @@ class TestS7ExtendedEvolution:
         climate_features = [
             f"{cat}/{tag}/{feat}"
             for cat, tag, feat in all_features
-            if any(kw in feat.lower() or kw in tag.lower() for kw in
-                   ["skeptic", "climate", "analyt", "empiric", "economic", "pragmat"])
+            if any(
+                kw in feat.lower() or kw in tag.lower()
+                for kw in ["skeptic", "climate", "analyt", "empiric", "economic", "pragmat"]
+            )
         ]
         print(f"\n  total features: {len(all_features)}")
         print(f"  climate/analytical features: {len(climate_features)}")
@@ -754,9 +804,7 @@ class TestS7ExtendedEvolution:
         time.sleep(2)
 
         with psycopg.connect(config.POSTGRES_URL) as conn:
-            count = conn.execute(
-                "SELECT COUNT(*) FROM semantic_features"
-            ).fetchone()[0]
+            count = conn.execute("SELECT COUNT(*) FROM semantic_features").fetchone()[0]
 
         print(f"\n  total semantic features in DB: {count}")
         # After 16 interactions of rich climate debate, we must have substantial features
