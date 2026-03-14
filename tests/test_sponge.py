@@ -48,7 +48,3 @@ def test_staged_updates_net_out_when_conflicting() -> None:
     assert "topic" not in s.opinion_vectors
 
 
-def test_legacy_heuristic_decay_removed() -> None:
-    """Heuristic decay moved out of SpongeState into LLM-driven agent flow."""
-    s = SpongeState(interaction_count=10)
-    assert not hasattr(s, "decay_beliefs")

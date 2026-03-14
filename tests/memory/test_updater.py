@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-import pytest
-
 from sonality.ess import (
     ESSResult,
     InternalConsistencyStatus,

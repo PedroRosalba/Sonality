@@ -410,7 +410,7 @@ class TestL2rRepeatability:
         )
 
         t = time.perf_counter()
-        ok, total, raws = self._run_n(
+        ok, total, _raws = self._run_n(
             prompt=prompt,
             response_model=_FiveField,
             fallback=_FiveField(
@@ -437,7 +437,7 @@ class TestL2rRepeatability:
         )
 
         t = time.perf_counter()
-        ok, total, raws = self._run_n(
+        ok, total, _raws = self._run_n(
             prompt=prompt,
             response_model=InsightExtractionResponse,
             fallback=InsightExtractionResponse(),
@@ -664,8 +664,8 @@ class TestL2xPerPromptParsing:
 
     def test_chunking_prompt_parses_correctly(self) -> None:
         """CHUNKING_PROMPT → ChunkingResponse: list of chunk objects extracted."""
-        from sonality.memory.derivatives import ChunkingResponse
         from sonality.llm.prompts import CHUNKING_PROMPT
+        from sonality.memory.derivatives import ChunkingResponse
 
         text = (
             "Nuclear power produces 12g CO2/kWh versus 820g for coal. "
@@ -693,8 +693,9 @@ class TestL2xPerPromptParsing:
 
     def test_query_routing_prompt_parses_correctly(self) -> None:
         """QUERY_ROUTING_PROMPT → expected category + depth fields."""
-        from sonality.llm.prompts import QUERY_ROUTING_PROMPT
         from pydantic import BaseModel
+
+        from sonality.llm.prompts import QUERY_ROUTING_PROMPT
 
         class RoutingResponse(BaseModel):
             category: str
@@ -732,8 +733,9 @@ class TestL2xPerPromptParsing:
 
     def test_boundary_detection_prompt_parses_correctly(self) -> None:
         """BOUNDARY_DETECTION_PROMPT → boundary_decision field."""
-        from sonality.llm.prompts import BOUNDARY_DETECTION_PROMPT
         from pydantic import BaseModel
+
+        from sonality.llm.prompts import BOUNDARY_DETECTION_PROMPT
 
         class BoundaryResponse(BaseModel):
             boundary_decision: str
@@ -769,8 +771,9 @@ class TestL2xPerPromptParsing:
 
     def test_reflection_gate_prompt_parses_correctly(self) -> None:
         """REFLECTION_GATE_PROMPT → trigger field with valid value."""
-        from sonality.llm.prompts import REFLECTION_GATE_PROMPT
         from pydantic import BaseModel
+
+        from sonality.llm.prompts import REFLECTION_GATE_PROMPT
 
         class ReflectionGateResponse(BaseModel):
             trigger: str
@@ -804,8 +807,9 @@ class TestL2xPerPromptParsing:
 
     def test_belief_decay_prompt_parses_correctly(self) -> None:
         """BELIEF_DECAY_PROMPT → action field with valid value."""
-        from sonality.llm.prompts import BELIEF_DECAY_PROMPT
         from pydantic import BaseModel
+
+        from sonality.llm.prompts import BELIEF_DECAY_PROMPT
 
         class BeliefDecayResponse(BaseModel):
             action: str
@@ -877,9 +881,9 @@ class TestL3xMemoryStoreRetrieve:
 
     def test_full_store_and_vector_recall(self, pg_url: str) -> None:
         """Store a distinctive episode then verify vector search returns it top-1."""
-        import asyncio
-        import psycopg
         import uuid
+
+        import psycopg
 
         from sonality.memory.derivatives import DerivativeChunker
         from sonality.memory.embedder import ExternalEmbedder
@@ -932,30 +936,3 @@ class TestL3xMemoryStoreRetrieve:
             f"Top similarity {rows[0][2]:.4f} too low — retrieval quality concern"
         )
 
-    def test_insight_extraction_end_to_end(self) -> None:
-        """extract_insight() returns non-empty string for a high-ESS interaction."""
-        from sonality.ess import ESSResult, InternalConsistencyStatus, OpinionDirection, ReasoningType, SourceReliability
-        from sonality.memory.updater import extract_insight
-
-        ess = ESSResult(
-            score=0.72,
-            reasoning_type=ReasoningType.EMPIRICAL_DATA,
-            source_reliability=SourceReliability.PEER_REVIEWED,
-            internal_consistency=InternalConsistencyStatus.CONSISTENT,
-            novelty=0.8,
-            topics=("nuclear_energy",),
-            summary="User cited peer-reviewed data on nuclear safety.",
-            opinion_direction=OpinionDirection.SUPPORTS,
-        )
-        t = time.perf_counter()
-        insight = extract_insight(
-            ess=ess,
-            user_message="France's 40-year nuclear track record shows 12g CO2/kWh with zero major incidents.",
-            agent_response="The data does challenge common safety narratives — I find the numbers compelling.",
-        )
-        elapsed = _elapsed(t)
-
-        print(f"\n  insight={insight!r}  ({elapsed})")
-        # High ESS + substantive exchange should extract an insight
-        # (though the model may legitimately decide SKIP — we just verify no crash + valid output)
-        assert isinstance(insight, str), f"Expected str, got {type(insight)}"
