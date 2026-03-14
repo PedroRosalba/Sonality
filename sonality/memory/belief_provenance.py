@@ -17,6 +17,7 @@ from pydantic import BaseModel, field_validator
 from ..llm.caller import llm_call
 from ..llm.prompts import BELIEF_UPDATE_PROMPT
 from .graph import EdgeType, MemoryGraph
+from .health_trace import trace_belief_provenance
 from .sponge import BeliefMeta, SpongeState
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,21 @@ async def assess_belief_evidence(
     meta = sponge.belief_meta.get(topic)
     current_value = sponge.opinion_vectors.get(topic, 0.0)
 
+    # Trace belief state before provenance assessment
+    log.debug(
+        "BELIEF_BEFORE_ASSESS topic=%s | pos=%.3f | conf=%.2f | uncert=%.2f | "
+        "support=%d | contra=%d | ess=%.3f | type=%s | ep=%s",
+        topic,
+        current_value,
+        meta.confidence if meta else 0.0,
+        meta.uncertainty if meta else 1.0,
+        len(meta.supporting_episode_uids) if meta else 0,
+        len(meta.contradicting_episode_uids) if meta else 0,
+        ess_score,
+        reasoning_type,
+        episode_uid[:12],
+    )
+
     prompt = BELIEF_UPDATE_PROMPT.format(
         topic=topic,
         current_value=f"{current_value:+.2f}",
@@ -113,6 +129,16 @@ async def assess_belief_evidence(
             result.error,
         )
     response = result.value
+    log.debug(
+        "belief_provenance topic=%s: direction=%.2f strength=%.2f uncertainty=%.2f mag=%s contract=%s | %s",
+        topic,
+        response.direction,
+        response.evidence_strength,
+        response.new_uncertainty,
+        response.update_magnitude.value,
+        response.contraction_action.value,
+        response.reasoning[:100],
+    )
 
     # Update provenance in BeliefMeta
     if meta is None:
@@ -140,6 +166,19 @@ async def assess_belief_evidence(
         )
     except Exception:
         log.exception("Failed to create belief provenance edge for %s", topic)
+
+    # Emit detailed provenance trace for health analysis
+    trace_belief_provenance(
+        interaction_num=sponge.interaction_count,
+        topic=topic,
+        episode_uid=episode_uid,
+        edge_type=edge_type.value,
+        strength=response.evidence_strength,
+        direction=response.direction,
+        update_magnitude=response.update_magnitude.value,
+        contraction=response.contraction_action.value,
+        reasoning=response.reasoning,
+    )
 
     return ProvenanceUpdate(
         topic=topic,

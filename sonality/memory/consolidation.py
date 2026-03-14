@@ -22,6 +22,7 @@ from ..llm.prompts import CONSOLIDATION_READINESS_PROMPT
 from ..provider import chat_completion
 from .context_format import format_episode_block, format_episode_line
 from .graph import EpisodeNode, MemoryGraph
+from .health_trace import trace_consolidation
 
 log = logging.getLogger(__name__)
 
@@ -91,6 +92,18 @@ class ConsolidationEngine:
         )
         await self._graph.mark_segment_consolidated(segment_id)
 
+        # Trace consolidation for semantic drift analysis (SSGM framework alignment)
+        source_content_len = sum(len(ep.content or "") for ep in episodes)
+        trace_consolidation(
+            segment_id=segment_id,
+            episode_count=len(episodes),
+            source_content_len=source_content_len,
+            summary_len=len(summary_text),
+            topics=topics,
+            readiness_confidence=readiness.confidence,
+            summary_focus=readiness.suggested_summary_focus,
+        )
+
         log.info(
             "Consolidated segment %s into summary %s (%d episodes -> %d chars)",
             segment_id,
@@ -154,7 +167,6 @@ class ConsolidationEngine:
                 model=config.FAST_LLM_MODEL,
                 max_tokens=config.FAST_LLM_MAX_TOKENS,
                 messages=({"role": "user", "content": prompt},),
-                disable_thinking=True,
             )
             return completion.text.strip()
         except Exception:

@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import logging
 from enum import StrEnum
-from typing import Final
-
 from pydantic import BaseModel
 
 from .. import config
@@ -19,10 +17,6 @@ _INSIGHT_PLACEHOLDERS: frozenset[str] = frozenset({
     "insert insight here",
 })
 
-MIN_SNAPSHOT_RETENTION: Final = 0.6
-SNAPSHOT_CHAR_LIMIT: Final[int] = config.SPONGE_MAX_TOKENS * 5
-
-
 class InsightDecision(StrEnum):
     EXTRACT = "EXTRACT"
     SKIP = "SKIP"
@@ -31,30 +25,6 @@ class InsightDecision(StrEnum):
 class InsightExtractionResponse(BaseModel):
     insight_decision: InsightDecision = InsightDecision.SKIP
     insight_text: str = ""
-
-
-def validate_snapshot(old: str, new: str) -> bool:
-    """Reject snapshots that lost too much content.
-
-    Repeated LLM rewrites are lossy — minority opinions and distinctive traits
-    can silently vanish. This check catches catastrophic content loss.
-    (Open Character Training 2025: persona traits = neural activation patterns;
-    losing a sentence = losing a trait)
-    """
-    if not new or len(new) < 30:
-        log.warning("Snapshot validation failed: new snapshot too short (%d chars)", len(new))
-        return False
-    ratio = len(new) / max(len(old), 1)
-    if ratio < MIN_SNAPSHOT_RETENTION:
-        log.warning(
-            "Snapshot validation failed: content ratio %.2f < %.2f (%d -> %d chars)",
-            ratio,
-            MIN_SNAPSHOT_RETENTION,
-            len(old),
-            len(new),
-        )
-        return False
-    return True
 
 
 def extract_insight(

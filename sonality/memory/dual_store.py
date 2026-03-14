@@ -94,6 +94,18 @@ class DualEpisodeStore:
             len(derivatives[0].embedding) if derivatives else 0,
             [d.node.key_concept[:20] for d in derivatives[:3]],
         )
+        # Detailed memory trace for health analysis
+        log.debug(
+            "MEMORY_TRACE episode=%s | user_msg_len=%d | agent_resp_len=%d | "
+            "topics=%s | ess=%.3f | segment=%s",
+            episode_uid[:8], len(user_message), len(agent_response),
+            topics[:3], ess_score, segment_id[:8] if segment_id else "none",
+        )
+        for i, d in enumerate(derivatives[:5]):
+            log.debug(
+                "MEMORY_TRACE deriv[%d]=%s | concept=%s | text=%.80s...",
+                i, d.node.uid[:8], d.node.key_concept, d.node.text.replace('\n', ' '),
+            )
 
         # Phase 2: Neo4j graph writes (ACID transaction)
         episode_node = EpisodeNode(

@@ -12,8 +12,18 @@ from .derivatives import ChunkImportance, DerivativeChunker
 from .dual_store import DualEpisodeStore, EpisodeStorageError, StoredEpisode
 from .embedder import EmbeddingUnavailableError, ExternalEmbedder
 from .forgetting import ForgettingAction, ForgettingEngine
+from .knowledge_extract import (
+    ExtractedProposition,
+    KnowledgeConsolidation,
+    PropositionType,
+    consolidate_knowledge,
+    extract_and_store_knowledge,
+    prune_stale_knowledge,
+    retrieve_relevant_knowledge,
+)
 from .graph import EdgeType, EpisodeNode, MemoryGraph
 from .health import HealthReport, OverallHealth, assess_health
+from .health_trace import dump_memory_snapshot, trace_belief_provenance
 from .retrieval import (
     AggregationStrategy,
     ChainOfQueryAgent,
@@ -31,7 +41,7 @@ from .semantic_features import SemanticIngestionWorker
 from .sponge import BeliefMeta, SpongeState, StagedOpinionUpdate
 from .stm import ShortTermMemory
 from .stm_consolidator import BackgroundSummarizer
-from .updater import extract_insight, validate_snapshot
+from .updater import extract_insight
 
 __all__ = [
     "AggregationStrategy",
@@ -53,11 +63,14 @@ __all__ = [
     "EpisodeNode",
     "EpisodeStorageError",
     "EventBoundaryDetector",
+    "ExtractedProposition",
     "ExternalEmbedder",
     "ForgettingAction",
     "ForgettingEngine",
     "HealthReport",
+    "KnowledgeConsolidation",
     "MemoryGraph",
+    "PropositionType",
     "OverallHealth",
     "ProvenanceUpdate",
     "QueryCategory",
@@ -75,7 +88,12 @@ __all__ = [
     "UpdateMagnitude",
     "assess_belief_evidence",
     "assess_health",
+    "consolidate_knowledge",
+    "prune_stale_knowledge",
+    "dump_memory_snapshot",
+    "extract_and_store_knowledge",
+    "retrieve_relevant_knowledge",
     "extract_insight",
     "rerank_episodes",
-    "validate_snapshot",
+    "trace_belief_provenance",
 ]
