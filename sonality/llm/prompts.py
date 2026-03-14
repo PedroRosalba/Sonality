@@ -407,10 +407,12 @@ Existing features in this category:
 {existing_features}
 
 DELETION RULES (strictly enforced):
-- NEVER issue a delete command unless the current episode EXPLICITLY contradicts an existing feature.
+- NEVER issue a delete command unless the current episode contains a direct, new, assertive counter-claim that explicitly contradicts the feature's factual content.
 - A topic shift does NOT justify deletion. If the episode is about [topic A], do NOT delete [topic B] or [topic C] features.
-- Silence or absence is NOT a contradiction. Only direct contradiction is.
-- If deleting, you MUST fill the "reason" field with the exact phrase from the episode that contradicts the feature.
+- Silence or absence is NOT a contradiction. Only a direct counter-assertion is.
+- Acknowledging the emotional validity of another's position, expressing empathy, or paraphrasing a previous discussion is NOT a contradiction — do NOT delete based on empathetic language.
+- When ESS line shows emotional_appeal, social_pressure, debunked_claim, or anecdotal: issue NO delete commands. Only add or update communication-style features.
+- If deleting, you MUST fill the "reason" field with the exact new assertive phrase from the episode that contradicts the feature.
 
 Your response must be ONLY this JSON object with actual values filled in (no {{"..."}}, no placeholders):
 {{
@@ -431,15 +433,16 @@ You are reviewing semantic features in the "{category}" category to find redunda
 Features to review:
 {features}
 
-Merge only features that describe the exact same trait with different wording. Do NOT merge distinct behaviors.
+Merge ONLY features that describe the exact same trait with different wording. Do NOT merge distinct behaviors.
+Keep the reasoning field to ONE short sentence. Do not analyse individual UIDs in the reasoning field.
 
 Your response must be a single JSON object with this exact structure.
 
 No-merge example:
-{{"consolidation_decision": "SKIP", "reasoning": "Features are distinct.", "actions": []}}
+{{"consolidation_decision": "SKIP", "reasoning": "All features are distinct.", "actions": []}}
 
 Merge example:
-{{"consolidation_decision": "CONSOLIDATE", "reasoning": "feat-abc and feat-xyz both describe the same trait.", "actions": [{{"source_uid": "feat-abc", "target_uid": "feat-xyz", "canonical_tag": "[matching tag]", "canonical_feature": "[canonical name]", "canonical_value": "[best description]", "reason": "duplicate"}}]}}
+{{"consolidation_decision": "CONSOLIDATE", "reasoning": "Two features describe the same trait.", "actions": [{{"source_uid": "[uid-to-remove]", "target_uid": "[uid-to-keep]", "canonical_tag": "[matching tag]", "canonical_feature": "[canonical name]", "canonical_value": "[best description]", "reason": "duplicate"}}]}}
 
 Respond with the JSON object now:"""
 
@@ -539,7 +542,7 @@ Output ONLY a JSON object (replace bracket placeholders with actual content from
 type must be: fact, opinion, speculation, or noise.
 confidence: 0.0-1.0 calibrated per Stage 4 rules — source quality determines confidence.
 source_entity: who made the claim (empty string for unattributed claims).
-key_concepts: 1-3 topic labels for embedding and retrieval.
+key_concepts: 1-3 topic labels for embedding and retrieval. For opinion-type propositions, key_concepts[0] must be the concrete subject-matter domain or real-world phenomenon being evaluated (a technology, scientific field, methodology, or object) — NOT the evidential quality, statistical properties, or verification status of the claim itself (e.g., NOT "source details", "sample size", "heterogeneity", "citations").
 sentiment: opinion stance toward key_concepts[0] — +1.0 = strongly favorable, -1.0 = strongly unfavorable, 0.0 = neutral/not applicable (use 0.0 for facts and speculations)."""
 
 # --- Knowledge Consolidation (Reflection) ---
@@ -598,18 +601,15 @@ Existing tracked concepts:
 New topics extracted this turn:
 {new_topics}
 
-For each new topic decide: is it EXACTLY the same concept as an existing one \
-(true synonym or abbreviation — e.g. "nuclear power" = "nuclear energy", \
-"CO2" = "carbon dioxide")? If yes, return the existing name exactly. \
-If no, return the new topic unchanged.
+For each new topic decide: is it the SAME concept as an existing one, differing only \
+in label (a true synonym, common abbreviation, or alternate spelling for the identical \
+referent)? If yes, return the existing name exactly. If no, return the new topic unchanged.
 
-NEVER merge related-but-distinct concepts:
-- "emotional distress" ≠ "depression" (different specificity and clinical meaning)
-- "nuclear energy" ≠ "nuclear weapons"
-- "CO2 emissions" ≠ "air quality"
-- "public opinion" ≠ "consensus"
+Only merge when both terms point to exactly the same real-world entity or idea. \
+Do NOT merge concepts that merely share a domain, a cause-effect relationship, \
+a part-whole relationship, or a difference in specificity/scope — those must stay separate.
 
-When in doubt, keep them separate.
+When uncertain, keep them separate.
 
 Output ONLY a JSON object mapping every new topic to its canonical form:
 {{"mappings": {{"new_topic": "canonical_name"}}}}"""
